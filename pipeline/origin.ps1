@@ -58,6 +58,7 @@ function Show-Help {
     Write-Host ""
     Write-Host "   one at a time:  origin walls | ceilings | soffits | columns | beams"
     Write-Host "   origin status       is the bridge alive, and on which document"
+    Write-Host "   origin doctor       check every path resolved (run this first on a new machine)"
     Write-Host ""
     Write-Host "  Nothing is saved. Save it yourself in Revit if you like the result." -ForegroundColor DarkGray
     Write-Host "  Needs dynamo\ORIGIN Pipeline Bridge.dyn open in Dynamo, run mode Periodic." -ForegroundColor DarkGray
@@ -76,6 +77,49 @@ function Get-Heartbeat {
 $key = $Command.ToLower()
 
 if ($key -eq 'help' -or $key -eq '-h' -or $key -eq '--help') { Show-Help; exit 0 }
+
+if ($key -eq 'doctor') {
+    # What a fresh clone actually resolved to. The two roots are worked out from this script's
+    # own location and cannot be wrong; the drywall repo lives outside the repo and can be.
+    Write-Host ""
+    Write-Host "  ORIGIN - resolved paths" -ForegroundColor Cyan
+    Write-Host "  ------------------------------------------------------------"
+    $py = python -c @"
+import json, os
+p = os.path.join(r'$root', 'origin_paths.py')
+ns = {'__name__': 'origin_paths', '__file__': p}
+exec(compile(open(p).read(), p, 'exec'), ns)
+print(json.dumps(ns['describe']()))
+"@ 2>&1
+    try { $d = $py | ConvertFrom-Json } catch {
+        Write-Host "  could not run the resolver (is python on PATH?)" -ForegroundColor Red
+        Write-Host "  $py"; exit 1
+    }
+    function Line($label, $value, $ok) {
+        $mark = "  ok "; $col = "Green"
+        if ($null -ne $ok -and -not $ok) { $mark = "MISS"; $col = "Red" }
+        Write-Host ("   {0}  {1,-14} {2}" -f $mark, $label, $value) -ForegroundColor $col
+    }
+    Line "pipeline"  $d.PIPELINE_ROOT $d.pipeline_root_ok
+    Line "ceilings"  $d.CEILING_ROOT  $d.ceiling_root_ok
+    Line "drywall"   $d.DRYWALL_REPO  $d.drywall_repo_ok
+    Line "envs"      $d.INPUT_DIR     $null
+    Write-Host ("   ---   config         {0}" -f $(if ($d.config_file) { $d.config_file } else { "none (using built-in defaults)" })) -ForegroundColor DarkGray
+    Write-Host "  ------------------------------------------------------------"
+    if (-not $d.drywall_repo_ok) {
+        Write-Host "  The drywall generators are not at that path." -ForegroundColor Yellow
+        Write-Host "  They live in a separate repository. Point at them with either:" -ForegroundColor Yellow
+        Write-Host "    origin.config.json  beside this folder, key 'drywall_repo'"
+        Write-Host "    or the ORIGIN_DRYWALL_REPO environment variable"
+        Write-Host "  Until then 'origin sep' works; anything that panels will report"
+        Write-Host "  'generator not found' per generator."
+        Write-Host ""
+        exit 1
+    }
+    Write-Host "  everything resolves - you are good to go" -ForegroundColor Green
+    Write-Host ""
+    exit 0
+}
 
 if ($key -eq 'status') {
     $hb = Get-Heartbeat

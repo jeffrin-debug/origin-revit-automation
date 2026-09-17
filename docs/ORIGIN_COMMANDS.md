@@ -47,6 +47,7 @@ cd C:\Users\Origoncad\origin_pipeline
 | `panels-all` | walls → ceilings → soffits → columns → beams | `az` |
 | `all` | `sep`, then all five generators | `master` |
 | `status` | Is the bridge alive, and on which document | — |
+| `doctor` | Check every path resolved correctly. **Run this first on a new machine** | — |
 
 One generator at a time, when you are chasing something specific:
 
