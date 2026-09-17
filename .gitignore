@@ -1,0 +1,42 @@
+# Revit models. Never commit these - they are project data, not code, and GitHub rejects
+# files over 100 MB anyway. The two source folders hold ~500 MB of them.
+*.rvt
+*.rfa
+*.rte
+*.rvt.*
+*.0001.rvt
+
+# Bridge runtime. Rewritten every second while Dynamo is running.
+bridge/
+command.json
+result.json
+heartbeat.json
+node_started.txt
+node_error.txt
+
+# Run output - per-env reports, logs, manifests, staged models
+_reports/
+_logs/
+out/
+00_normalized/
+01_ceiling_done/
+02_panels_done/
+03_sim_ready/
+_backups/
+
+# Machine-local config written fresh by the launchers before each run
+_origin_cli.json
+_run_config.json
+_active_config.json
+_audit_config*.json
+_compare_config.json
+_diag_config.json
+_fix_config.json
+_jamb_config.json
+ledger.json
+
+__pycache__/
+*.pyc
+.vscode/
+.DS_Store
+Thumbs.db

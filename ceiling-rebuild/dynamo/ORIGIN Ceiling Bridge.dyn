@@ -1,0 +1,149 @@
+{
+  "Uuid": "2111e54b-f802-4aa3-baad-4457feb8976a",
+  "IsCustomNode": false,
+  "Description": "Live file-socket bridge: heartbeat + command execution (run PERIODIC)",
+  "Name": "ORIGIN Ceiling Bridge",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "# ceiling_bridge.py\n# ============================================================\n# ORIGIN CEILING REBUILD \u003c-\u003e Revit LIVE BRIDGE (Dynamo Python node, PERIODIC mode)\n#\n# Reference copy of the code embedded in dynamo\\ORIGIN Ceiling Bridge.dyn. This project is\n# standalone: it has its own bridge folder and its own graph, and shares nothing with the\n# drywall repo. Open dynamo\\ORIGIN Ceiling Bridge.dyn in Dynamo, set the run mode\n# (bottom-left) to PERIODIC (~1000 ms) and leave it running. Every tick this node:\n#   1. writes bridge\\heartbeat.json  - proof of life: time, open document, active view,\n#      selection count, tick counter, last executed command id\n#   2. reads  bridge\\command.json    - {\"id\": \u003cn\u003e, \"script\": \"\u003cabs path to .py\u003e\",\n#      \"transaction\": false}; when id differs from the last executed id the script FILE is\n#      read fresh from disk and exec\u0027d inside Revit (so edited scripts run without any\n#      close/reopen), and its OUT lands in bridge\\result.json with ok/error/timing.\n#\n# SELF-DIAGNOSING: a Dynamo node that dies shows only a yellow triangle whose text you have to\n# hover to read, which is useless when the node is being driven from outside Revit. So before\n# anything that can fail, this writes bridge\\node_started.txt, and any exception anywhere lands\n# in bridge\\node_error.txt. Between those two files the failure is always visible from disk:\n#   neither file        -\u003e the node never executed (graph wiring / run mode)\n#   started, no error   -\u003e the node ran fine\n#   started + error     -\u003e the node ran and threw; the traceback is in node_error.txt\n#\n# Batch scripts here run with \"transaction\": false and open their own background documents,\n# so they call TransactionManager.Instance.ForceCloseTransaction() themselves before any\n# Application.OpenDocumentFile - that call throws if any transaction is open anywhere.\n# ============================================================\n\nimport os\nimport time\nimport traceback\n\nBRIDGE_DIR = r\"C:\\Users\\Origoncad\\origin_ceiling_rebuild\\bridge\"\nCMD_PATH = os.path.join(BRIDGE_DIR, \"command.json\")\nRES_PATH = os.path.join(BRIDGE_DIR, \"result.json\")\nHB_PATH = os.path.join(BRIDGE_DIR, \"heartbeat.json\")\nSTARTED_PATH = os.path.join(BRIDGE_DIR, \"node_started.txt\")\nERROR_PATH = os.path.join(BRIDGE_DIR, \"node_error.txt\")\n\ntry:\n    if not os.path.exists(BRIDGE_DIR):\n        os.makedirs(BRIDGE_DIR)\nexcept Exception:\n    pass\n\n\ndef _append(path, text):\n    try:\n        f = open(path, \"a\")\n        try:\n            f.write(text)\n        finally:\n            f.close()\n    except Exception:\n        pass\n\n\ndef _write(path, text):\n    try:\n        f = open(path, \"w\")\n        try:\n            f.write(text)\n        finally:\n            f.close()\n    except Exception:\n        pass\n\n\n# Proof the node body executed at all - written before any import that could fail.\n# OVERWRITE, not append: this fires every tick, and appending grew the file to 720 KB /\n# 21203 lines in a single session. Only the latest entry has any diagnostic value.\n_write(STARTED_PATH, time.strftime(\"%Y-%m-%d %H:%M:%S\") + \" node entered\\n\")\n\ntry:\n    import clr\n    import json\n\n    clr.AddReference(\u0027RevitAPI\u0027)\n    clr.AddReference(\u0027RevitServices\u0027)\n\n    from Autodesk.Revit.DB import *\n    from RevitServices.Persistence import DocumentManager\n    from RevitServices.Transactions import TransactionManager\n\n    doc = DocumentManager.Instance.CurrentDBDocument\n    uidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument\n\n    def write_json(path, obj):\n        tmp = path + \".tmp\"\n        f = open(tmp, \"w\")\n        try:\n            json.dump(obj, f, indent=2, default=str)\n        finally:\n            f.close()\n        try:\n            if os.path.exists(path):\n                os.remove(path)\n            os.rename(tmp, path)\n        except Exception:\n            pass\n\n    def read_json(path):\n        try:\n            f = open(path)\n            try:\n                return json.load(f)\n            finally:\n                f.close()\n        except Exception:\n            return None\n\n    def run_command(cmd):\n        res = {\"id\": cmd.get(\"id\"), \"ok\": False, \"out\": None, \"error\": None,\n               \"script\": cmd.get(\"script\"), \"started\": time.strftime(\"%Y-%m-%d %H:%M:%S\")}\n        path = cmd.get(\"script\") or \"\"\n        if not os.path.exists(path):\n            res[\"error\"] = \"script not found: {}\".format(path)\n            return res\n        try:\n            src = open(path).read()\n            ns = {\"IN\": [None] * 10, \"OUT\": None, \"__name__\": \"__main__\", \"__file__\": path}\n            wrap = bool(cmd.get(\"transaction\"))\n            if wrap:\n                TransactionManager.Instance.EnsureInTransaction(doc)\n            try:\n                exec(compile(src, path, \"exec\"), ns)\n            finally:\n                if wrap:\n                    TransactionManager.Instance.TransactionTaskDone()\n            res[\"ok\"] = True\n            res[\"out\"] = ns.get(\"OUT\")\n        except Exception:\n            res[\"error\"] = traceback.format_exc()\n        res[\"finished\"] = time.strftime(\"%Y-%m-%d %H:%M:%S\")\n        return res\n\n    last = read_json(RES_PATH)\n    last_id = last.get(\"id\") if isinstance(last, dict) else None\n    cmd = read_json(CMD_PATH)\n    status = \"idle\"\n    if isinstance(cmd, dict) and cmd.get(\"id\") is not None and cmd.get(\"id\") != last_id:\n        status = \"ran command {}\".format(cmd.get(\"id\"))\n        write_json(RES_PATH, run_command(cmd))\n        last_id = cmd.get(\"id\")\n\n    hb = read_json(HB_PATH) or {}\n    tick = int(hb.get(\"tick\", 0)) + 1\n    view_name = \"\"\n    sel_count = 0\n    try:\n        view_name = doc.ActiveView.Name\n    except Exception:\n        pass\n    try:\n        sel_count = len(list(uidoc.Selection.GetElementIds()))\n    except Exception:\n        pass\n    write_json(HB_PATH, {\n        \"time\": time.strftime(\"%Y-%m-%d %H:%M:%S\"),\n        \"doc\": doc.Title,\n        \"view\": view_name,\n        \"selection_count\": sel_count,\n        \"tick\": tick,\n        \"last_command_id\": last_id,\n        \"status\": status,\n    })\n\n    # Clear any stale error from a previous tick now that we know this one succeeded.\n    try:\n        if os.path.exists(ERROR_PATH):\n            os.remove(ERROR_PATH)\n    except Exception:\n        pass\n\n    OUT = \"ceiling bridge alive - tick {} - {}\".format(tick, status)\n\nexcept Exception:\n    tb = traceback.format_exc()\n    _write(ERROR_PATH, time.strftime(\"%Y-%m-%d %H:%M:%S\") + \"\\n\" + tb)\n    OUT = \"ceiling bridge FAILED:\\n\" + tb\n",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "7ce63dae7d8b4b928949544f59ca28bd",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "f95cbef95cfb41eea96ceff90a494347",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "29c53540d9a2405c89c91befd1a4a0da",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.ZeroTouch.DSFunction, DynamoCore",
+      "Id": "bd9cca58a0254f9ab0c1878630bbc742",
+      "NodeType": "FunctionNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "2f79e36a816a401a958e0cc2be439937",
+          "Name": "dateTime",
+          "Description": "DateTime representing the present time",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "FunctionSignature": "DSCore.DateTime.Now",
+      "Replication": "Auto",
+      "Description": "The current system date and time.\n\nDateTime.Now: var"
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "2f79e36a816a401a958e0cc2be439937",
+      "End": "f95cbef95cfb41eea96ceff90a494347",
+      "Id": "e4516cca450c456bad2a6bafac3034ab",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": true,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "3.6",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "9.1",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "4.0.2.3852",
+      "RunType": "Periodic",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "7ce63dae7d8b4b928949544f59ca28bd",
+        "Name": "ORIGIN Bridge (keep running)",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 300.0,
+        "Y": 0.0
+      },
+      {
+        "Id": "bd9cca58a0254f9ab0c1878630bbc742",
+        "Name": "DateTime.Now",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -45.085884428484064,
+        "Y": -1.2725300538883744
+      }
+    ],
+    "Annotations": [],
+    "X": 194.0180289514115,
+    "Y": 234.92467759144262,
+    "Zoom": 0.7537254235989256
+  }
+}
