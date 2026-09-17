@@ -1,0 +1,18 @@
+{
+  "_comment": [
+    "Copy this to 'origin.config.json' beside the two roots (or inside either one) and edit.",
+    "Everything else - where pipeline/ and ceiling-rebuild/ live - is worked out at run time",
+    "from each script's own location, so only genuinely EXTERNAL paths belong here.",
+    "",
+    "Both keys are optional. Leaving one out keeps the built-in fallback.",
+    "Either can also be overridden per-shell with an environment variable:",
+    "  ORIGIN_DRYWALL_REPO   ORIGIN_INPUT_DIR",
+    "",
+    "Check what actually resolved on your machine with:",
+    "  python -c \"ns={'__file__':'pipeline/origin_paths.py'}; exec(open(ns['__file__']).read(),ns); print(ns['describe']())\""
+  ],
+
+  "drywall_repo": "C:\\path\\to\\origin_revit_drywall_scripts_v2_two_faces",
+
+  "input_dir": "C:\\path\\to\\folder\\holding\\your\\rvt\\envs"
+}

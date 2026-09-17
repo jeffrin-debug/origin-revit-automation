@@ -29,8 +29,16 @@ from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
-ROOT = r"C:\Users\Origoncad\origin_pipeline"
-CEILING_ROOT = r"C:\Users\Origoncad\origin_ceiling_rebuild"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+ROOT = _paths["PIPELINE_ROOT"]
+CEILING_ROOT = _paths["CEILING_ROOT"]
 CONFIG_PATH = os.path.join(ROOT, "_run_config.json")
 
 cfg = json.load(open(CONFIG_PATH))
@@ -50,10 +58,12 @@ for d in (OUT_CEILING, OUT_PANELS, REPORT_DIR):
 # --- load the two stage modules fresh from disk, exactly as the bridge loads this file ------
 core = {"__name__": "origin_ceiling_rebuild_core"}
 core_path = os.path.join(CEILING_ROOT, "origin_ceiling_rebuild_core.py")
+core["__file__"] = core_path
 exec(compile(open(core_path).read(), core_path, "exec"), core)
 
 stage2 = {"__name__": "stage2_panels"}
 stage2_path = os.path.join(ROOT, "stage2_panels.py")
+stage2["__file__"] = stage2_path
 exec(compile(open(stage2_path).read(), stage2_path, "exec"), stage2)
 
 uiapp = DocumentManager.Instance.CurrentUIApplication

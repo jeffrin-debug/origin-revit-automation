@@ -28,8 +28,16 @@ from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 from System.Collections.Generic import List
 
-ROOT = r"C:\Users\Origoncad\origin_pipeline"
-CEILING_ROOT = r"C:\Users\Origoncad\origin_ceiling_rebuild"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+ROOT = _paths["PIPELINE_ROOT"]
+CEILING_ROOT = _paths["CEILING_ROOT"]
 
 ORIGIN_APP_IDS = ("ORIGIN_ASSEMBLY_V4", "ORIGIN_CEILING_V1", "ORIGIN_BEAM_V1",
                   "ORIGIN_COLUMN_V1", "ORIGIN_BEAMCOL_V1")
@@ -111,6 +119,7 @@ t0 = time.time()
 core = {"__name__": "origin_ceiling_rebuild_core"}
 core_path = os.path.join(CEILING_ROOT, "origin_ceiling_rebuild_core.py")
 try:
+    core["__file__"] = core_path
     exec(compile(open(core_path).read(), core_path, "exec"), core)
 except Exception:
     out["stage1_load_error"] = traceback.format_exc()[-900:]
@@ -163,6 +172,7 @@ except Exception:
 s2_path = os.path.join(ROOT, "stage2_panels.py")
 stage2 = {"__name__": "stage2_panels"}
 try:
+    stage2["__file__"] = s2_path
     exec(compile(open(s2_path).read(), s2_path, "exec"), stage2)
     rep2 = stage2["run_on_document"](doc)
     gens = rep2.get("generators") or {}

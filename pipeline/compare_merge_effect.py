@@ -27,7 +27,15 @@ from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
-ROOT = r"C:\Users\Origoncad\origin_pipeline"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+ROOT = _paths["PIPELINE_ROOT"]
 OUT_DIR = os.path.join(ROOT, "_reports", "conformance")
 CONFIG_PATH = os.path.join(ROOT, "_compare_config.json")
 
@@ -41,6 +49,7 @@ PAIRS = cfg.get("pairs") or []          # [{"name":..,"original":path,"normalize
 
 stage2 = {"__name__": "stage2_panels"}
 s2_path = os.path.join(ROOT, "stage2_panels.py")
+stage2["__file__"] = s2_path
 exec(compile(open(s2_path).read(), s2_path, "exec"), stage2)
 
 uiapp = DocumentManager.Instance.CurrentUIApplication

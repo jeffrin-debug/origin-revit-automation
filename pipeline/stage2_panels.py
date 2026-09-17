@@ -33,8 +33,16 @@ clr.AddReference('RevitServices')
 from Autodesk.Revit.DB import *
 from RevitServices.Transactions import TransactionManager
 
-REPO = r"C:\Users\Origoncad\Downloads\origin_revit_drywall_scripts_v2_two_faces"
-ROOT = r"C:\Users\Origoncad\origin_pipeline"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+REPO = _paths["DRYWALL_REPO"]
+ROOT = _paths["PIPELINE_ROOT"]
 
 # Drive the ceiling generator's FURRING_RUN_NS from the site's main door instead of the
 # hard-coded module constant, so one rule covers every env (see ceiling_direction.py). Set
@@ -102,6 +110,7 @@ def _apply_ceiling_direction(doc, src, report):
     try:
         ns = {"__name__": "ceiling_direction"}
         p = os.path.join(ROOT, "ceiling_direction.py")
+        ns["__file__"] = p
         exec(compile(open(p).read(), p, "exec"), ns)
 
         res = ns["resolve_direction"](doc)

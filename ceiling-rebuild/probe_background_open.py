@@ -22,11 +22,19 @@ from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
 CANDIDATES = [
-    r"C:\Users\Origoncad\Downloads\B1-a.rvt",
-    r"C:\Users\Origoncad\Downloads\409_Testing.rvt",
-    r"C:\Users\Origoncad\Downloads\Project8.rvt",
-    r"C:\Users\Origoncad\Downloads\12M_FR_11.rvt",
+    os.path.join(_paths["INPUT_DIR"], "B1-a.rvt"),
+    os.path.join(_paths["INPUT_DIR"], "409_Testing.rvt"),
+    os.path.join(_paths["INPUT_DIR"], "Project8.rvt"),
+    os.path.join(_paths["INPUT_DIR"], "12M_FR_11.rvt"),
 ]
 
 uiapp = DocumentManager.Instance.CurrentUIApplication

@@ -23,7 +23,15 @@ from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
-ROOT = r"C:\Users\Origoncad\origin_ceiling_rebuild"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+ROOT = _paths["CEILING_ROOT"]
 CORE = os.path.join(ROOT, "origin_ceiling_rebuild_core.py")
 OUT_DIR = os.path.join(ROOT, "out")
 REPORT_DIR = os.path.join(OUT_DIR, "_reports")
@@ -40,14 +48,13 @@ DELETE_UNMATCHED = True
 # selection is needed, and it manages its own transaction through Dynamo's TransactionManager,
 # which commits lazily - hence the ForceCloseTransaction either side.
 PANELISE = True
-GENERATOR = (r"C:\Users\Origoncad\Downloads\origin_revit_drywall_scripts_v2_two_faces"
-             r"\origin_ceiling_assembly_v1_notaper_noscrew_nojoint.py")
+GENERATOR = os.path.join(_paths["DRYWALL_REPO"], "origin_ceiling_assembly_v1_notaper_noscrew_nojoint.py")
 
 # Where to look for envs. Set FILES explicitly to override discovery.
-INPUT_DIR = r"C:\Users\Origoncad\Downloads"
+INPUT_DIR = _paths["INPUT_DIR"]
 MAX_MB = 50.0          # the 148-695 MB models in Downloads are architecture references, not envs
 # Set to a list of paths to process exactly those; None = discover everything in INPUT_DIR.
-FILES = [r"C:\Users\Origoncad\Downloads\B1-a.rvt"]
+FILES = [os.path.join(_paths["INPUT_DIR"], "B1-a.rvt")]
 
 
 def discover(folder):
@@ -79,6 +86,7 @@ for d in (OUT_DIR, REPORT_DIR):
         os.makedirs(d)
 
 core = {"__name__": "origin_ceiling_rebuild_core"}
+core["__file__"] = CORE
 exec(compile(open(CORE).read(), CORE, "exec"), core)
 
 open_titles = []

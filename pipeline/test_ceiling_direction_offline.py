@@ -9,10 +9,19 @@
 
 import sys, types, math
 
+import os
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
 for name in ("Autodesk", "Autodesk.Revit", "Autodesk.Revit.DB"):
     sys.modules.setdefault(name, types.ModuleType(name))
 
-MOD = r"C:\Users\Origoncad\origin_pipeline\ceiling_direction.py"
+MOD = os.path.join(_paths["PIPELINE_ROOT"], "ceiling_direction.py")
 m = {"__name__": "ceiling_direction"}
 exec(compile(open(MOD, encoding="utf-8").read(), MOD, "exec"), m)
 

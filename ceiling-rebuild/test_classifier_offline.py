@@ -6,12 +6,21 @@
 
 import sys, types
 
+import os
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
 for name in ("Autodesk", "Autodesk.Revit", "Autodesk.Revit.DB",
              "System", "System.Collections", "System.Collections.Generic"):
     sys.modules.setdefault(name, types.ModuleType(name))
 sys.modules["System.Collections.Generic"].List = object
 
-CORE = r"C:\Users\Origoncad\origin_ceiling_rebuild\origin_ceiling_rebuild_core.py"
+CORE = os.path.join(_paths["CEILING_ROOT"], "origin_ceiling_rebuild_core.py")
 core = {"__name__": "origin_ceiling_rebuild_core"}
 exec(compile(open(CORE, encoding="utf-8").read(), CORE, "exec"), core)
 

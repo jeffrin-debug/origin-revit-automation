@@ -26,7 +26,15 @@ from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
-ROOT = r"C:\Users\Origoncad\origin_pipeline"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+ROOT = _paths["PIPELINE_ROOT"]
 CORE = os.path.join(ROOT, "w1_core.py")
 CFG = os.path.join(ROOT, "_active_config.json")
 
@@ -40,6 +48,7 @@ DO_MERGE = bool(cfg.get("merge", True))
 DO_PANELS = bool(cfg.get("panels", False))
 
 core = {"__name__": "w1_core"}
+core["__file__"] = CORE
 exec(compile(open(CORE).read(), CORE, "exec"), core)
 
 doc = DocumentManager.Instance.CurrentDBDocument
@@ -85,6 +94,7 @@ if DO_PANELS:
     s2_path = os.path.join(ROOT, "stage2_panels.py")
     stage2 = {"__name__": "stage2_panels"}
     try:
+        stage2["__file__"] = s2_path
         exec(compile(open(s2_path).read(), s2_path, "exec"), stage2)
         rep2 = stage2["run_on_document"](doc)
         gens = rep2.get("generators") or {}

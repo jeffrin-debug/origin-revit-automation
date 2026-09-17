@@ -34,8 +34,16 @@ from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
-ROOT = r"C:\Users\Origoncad\origin_pipeline"
-CEILING_ROOT = r"C:\Users\Origoncad\origin_ceiling_rebuild"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+ROOT = _paths["PIPELINE_ROOT"]
+CEILING_ROOT = _paths["CEILING_ROOT"]
 CONFIG = os.path.join(ROOT, "_origin_cli.json")
 REPORT_DIR = os.path.join(ROOT, "_reports", "live")
 
@@ -97,6 +105,7 @@ else:
         try:
             core = {"__name__": "origin_ceiling_rebuild_core"}
             core_path = os.path.join(CEILING_ROOT, "origin_ceiling_rebuild_core.py")
+            core["__file__"] = core_path
             exec(compile(open(core_path).read(), core_path, "exec"), core)
 
             # Dynamo's periodic node may still be holding a transaction against this document;
@@ -170,6 +179,7 @@ else:
         try:
             stage2 = {"__name__": "stage2_panels"}
             stage2_path = os.path.join(ROOT, "stage2_panels.py")
+            stage2["__file__"] = stage2_path
             exec(compile(open(stage2_path).read(), stage2_path, "exec"), stage2)
 
             # The generators each open their own transaction, so none of ours may be open.

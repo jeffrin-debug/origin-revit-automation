@@ -10,10 +10,19 @@ clr.AddReference('RevitServices')
 from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 
-ROOT = r"C:\Users\Origoncad\origin_pipeline"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+ROOT = _paths["PIPELINE_ROOT"]
 
 ns = {"__name__": "ceiling_direction"}
 p = os.path.join(ROOT, "ceiling_direction.py")
+ns["__file__"] = p
 exec(compile(open(p).read(), p, "exec"), ns)
 
 doc = DocumentManager.Instance.CurrentDBDocument

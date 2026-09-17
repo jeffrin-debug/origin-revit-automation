@@ -15,9 +15,17 @@ from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
-ROOT = r"C:\Users\Origoncad\origin_ceiling_rebuild"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+ROOT = _paths["CEILING_ROOT"]
 PAIRS = [
-    ("BEFORE (original)", r"C:\Users\Origoncad\Downloads\B1-a.rvt"),
+    ("BEFORE (original)", os.path.join(_paths["INPUT_DIR"], "B1-a.rvt")),
     ("AFTER  (rebuilt)", os.path.join(ROOT, "out", "B1-a.rvt")),
 ]
 

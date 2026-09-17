@@ -27,13 +27,22 @@ from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
-ROOT = r"C:\Users\Origoncad\origin_pipeline"
 
-TARGET = r"C:\Users\Origoncad\origin_ceiling_rebuild\out\Testing_Env.rvt"
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+ROOT = _paths["PIPELINE_ROOT"]
+
+TARGET = os.path.join(_paths["CEILING_ROOT"], "out", "Testing_Env.rvt")
 ONLY = None          # e.g. ["walls"] to run just one generator
 
 stage2 = {"__name__": "stage2_panels"}
 stage2_path = os.path.join(ROOT, "stage2_panels.py")
+stage2["__file__"] = stage2_path
 exec(compile(open(stage2_path).read(), stage2_path, "exec"), stage2)
 
 uiapp = DocumentManager.Instance.CurrentUIApplication

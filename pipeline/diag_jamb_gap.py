@@ -13,9 +13,17 @@ clr.AddReference('RevitServices')
 from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
 doc = DocumentManager.Instance.CurrentDBDocument
 
-cfg = json.load(open(r"C:\Users\Origoncad\origin_pipeline\_jamb_config.json"))
+cfg = json.load(open(os.path.join(_paths["PIPELINE_ROOT"], "_jamb_config.json")))
 WALL_EID = int(cfg["wall"])
 Z_LO = float(cfg.get("z_lo", 0.0))
 Z_HI = float(cfg.get("z_hi", 10.0))

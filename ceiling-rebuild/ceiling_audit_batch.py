@@ -21,16 +21,24 @@ from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
-ROOT = r"C:\Users\Origoncad\origin_ceiling_rebuild"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+ROOT = _paths["CEILING_ROOT"]
 CORE = os.path.join(ROOT, "origin_ceiling_rebuild_core.py")
 REPORT_DIR = os.path.join(ROOT, "out", "_reports")
 
 FILES = [
-    r"C:\Users\Origoncad\Downloads\B1-a.rvt",
-    r"C:\Users\Origoncad\Downloads\409_Testing.rvt",
-    r"C:\Users\Origoncad\Downloads\Project8.rvt",
-    r"C:\Users\Origoncad\Downloads\12M_FR_11.rvt",
-    r"C:\Users\Origoncad\Downloads\A-1a.rvt",
+    os.path.join(_paths["INPUT_DIR"], "B1-a.rvt"),
+    os.path.join(_paths["INPUT_DIR"], "409_Testing.rvt"),
+    os.path.join(_paths["INPUT_DIR"], "Project8.rvt"),
+    os.path.join(_paths["INPUT_DIR"], "12M_FR_11.rvt"),
+    os.path.join(_paths["INPUT_DIR"], "A-1a.rvt"),
 ]
 
 uiapp = DocumentManager.Instance.CurrentUIApplication
@@ -42,6 +50,7 @@ if not os.path.exists(REPORT_DIR):
 # Load the core fresh from disk every run - a bare import would be cached in sys.modules
 # across bridge ticks and silently run stale code.
 core = {"__name__": "origin_ceiling_rebuild_core"}
+core["__file__"] = CORE
 exec(compile(open(CORE).read(), CORE, "exec"), core)
 
 open_titles = []

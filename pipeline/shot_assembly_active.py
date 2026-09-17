@@ -14,13 +14,21 @@ from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 from System.Collections.Generic import List
 
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
 doc = DocumentManager.Instance.CurrentDBDocument
 
 VIEW_NAME = "ORIGIN Assembly"
-OUT_DIR = r"C:\Users\Origoncad\origin_pipeline\_reports\shots"
+OUT_DIR = os.path.join(_paths["PIPELINE_ROOT"], "_reports", "shots")
 PAD_FT = 3.0
 
-cfg_path = r"C:\Users\Origoncad\origin_pipeline\_shot_config.json"
+cfg_path = os.path.join(_paths["PIPELINE_ROOT"], "_shot_config.json")
 ZOOM = None
 if os.path.exists(cfg_path):
     try:

@@ -28,7 +28,15 @@ from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 from System.Collections.Generic import List
 
-ROOT = r"C:\Users\Origoncad\origin_pipeline"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+ROOT = _paths["PIPELINE_ROOT"]
 CORE = os.path.join(ROOT, "w1_core.py")
 S2 = os.path.join(ROOT, "stage2_panels.py")
 
@@ -36,6 +44,7 @@ ORIGIN_APP_IDS = ("ORIGIN_ASSEMBLY_V4", "ORIGIN_CEILING_V1", "ORIGIN_BEAM_V1",
                   "ORIGIN_COLUMN_V1", "ORIGIN_BEAMCOL_V1")
 
 core = {"__name__": "w1_core"}
+core["__file__"] = CORE
 exec(compile(open(CORE).read(), CORE, "exec"), core)
 
 doc = DocumentManager.Instance.CurrentDBDocument
@@ -79,6 +88,7 @@ def measure(doc):
 
 def run_panels(doc):
     stage2 = {"__name__": "stage2_panels"}
+    stage2["__file__"] = S2
     exec(compile(open(S2).read(), S2, "exec"), stage2)
     rep = stage2["run_on_document"](doc)
     gens = rep.get("generators") or {}

@@ -28,7 +28,15 @@ clr.AddReference('RevitServices')
 from Autodesk.Revit.DB import *
 from RevitServices.Persistence import DocumentManager
 
-REPO = r"C:\Users\Origoncad\Downloads\origin_revit_drywall_scripts_v2_two_faces"
+
+# Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
+# the machine this was written on.
+_paths = {"__name__": "origin_paths"}
+_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "origin_paths.py")
+_paths["__file__"] = _pp
+exec(compile(open(_pp).read(), _pp, "exec"), _paths)
+
+REPO = _paths["DRYWALL_REPO"]
 GENERATOR = os.path.join(REPO, "origin_ceiling_assembly_v1_notaper_noscrew_nojoint.py")
 
 # Make the ceiling boards follow the WALL script's layout rules.
@@ -58,7 +66,7 @@ OVERRIDES = {}
 # Asserted after the source is read, so a silent revert in the repo cannot go unnoticed.
 EXPECTED = {"MAXIMIZE_WHOLE_PANELS": "False"}
 
-ROOT = r"C:\Users\Origoncad\origin_ceiling_rebuild"
+ROOT = _paths["CEILING_ROOT"]
 REPORT_DIR = os.path.join(ROOT, "out", "_reports")
 
 doc = DocumentManager.Instance.CurrentDBDocument
