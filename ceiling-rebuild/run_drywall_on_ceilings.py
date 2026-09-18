@@ -139,6 +139,23 @@ try:
             res["layout_warning"] = ("generator layout settings are not what this project "
                                      "expects - ceilings may not match the wall layout")
 
+        # Panel DIRECTION from the site's main doorway - the same rule stage 2 applies, shared
+        # from ceiling_direction.apply_to_source rather than reimplemented. Without it this
+        # route keeps the generator's hard-coded FURRING_RUN_NS and silently disagrees with
+        # every other way into the same generator.
+        try:
+            _cd = {"__name__": "ceiling_direction"}
+            _cdp = os.path.join(_paths["PIPELINE_ROOT"], "ceiling_direction.py")
+            _cd["__file__"] = _cdp
+            exec(compile(open(_cdp).read(), _cdp, "exec"), _cd)
+            src, _dinfo = _cd["apply_to_source"](doc, src)
+            res["ceiling_direction"] = _dinfo.get("summary")
+            res["ceiling_direction_applied"] = _dinfo.get("applied")
+            if _dinfo.get("skipped"):
+                res["ceiling_direction_skipped"] = _dinfo["skipped"]
+        except Exception:
+            res["ceiling_direction_error"] = traceback.format_exc()[-400:]
+
         ns = {
             "IN": [ceilings] + [None] * 9,
             "OUT": None,

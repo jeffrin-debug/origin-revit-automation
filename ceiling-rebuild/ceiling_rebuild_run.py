@@ -214,6 +214,21 @@ for path in targets:
                     pr["shapes_before"] = _shapes()
                     TransactionManager.Instance.ForceCloseTransaction()
                     gsrc = open(GENERATOR).read()
+                    # Panel DIRECTION from this env's own main doorway. Resolved against the
+                    # BACKGROUND document (nd), not the UI one - the whole point of this batch
+                    # is that each env decides for itself.
+                    try:
+                        _cd = {"__name__": "ceiling_direction"}
+                        _cdp = os.path.join(_paths["PIPELINE_ROOT"], "ceiling_direction.py")
+                        _cd["__file__"] = _cdp
+                        exec(compile(open(_cdp).read(), _cdp, "exec"), _cd)
+                        gsrc, _dinfo = _cd["apply_to_source"](nd, gsrc)
+                        pr["direction"] = _dinfo.get("summary")
+                        pr["direction_applied"] = _dinfo.get("applied")
+                        if _dinfo.get("skipped"):
+                            pr["direction_skipped"] = _dinfo["skipped"]
+                    except Exception:
+                        pr["direction_error"] = traceback.format_exc()[-400:]
                     gns = {
                         "ORIGIN_TARGET_DOC": nd,          # generator honours this over the UI doc
                         "IN": [ceilings] + [None] * 9,

@@ -177,6 +177,46 @@ r = decide([door(3000, (math.cos(math.radians(5)), math.sin(math.radians(5))))])
 check("a nearly axis-aligned site does NOT warn",
       not any("rotated" in w for w in r["warnings"]))
 
+print("\nHEADER FALLBACK - envs with no Door elements (409, PH2A, Project2 - PH1 B)")
+# collect_header_openings derives facing from the header wall's NORMAL: for a wall running
+# (dx,dy) the opening is walked through at (-dy,dx). The geometry read needs Revit; this checks
+# the relationship it depends on, and that header rows decide exactly like door rows.
+import math as _m
+
+
+def header(span_mm, wall_dx, wall_dy, edge_m=0.1, name="hdr"):
+    L = _m.hypot(wall_dx, wall_dy)
+    facing = (-wall_dy / L, wall_dx / L)          # same expression as the resolver
+    return door(span_mm, facing, name=name, edge_m=edge_m)
+
+
+r = decide([header(900, 1.0, 0.0, name="header in an E-W wall")])
+check("header in a wall running X -> you walk through along Y",
+      r["walk_in_axis"] == "y" and r["furring_run_ns"] is False)
+
+r = decide([header(900, 0.0, 1.0, name="header in a N-S wall")])
+check("header in a wall running Y -> you walk through along X",
+      r["walk_in_axis"] == "x" and r["furring_run_ns"] is True)
+
+# A whole door-less env: several headers, the widest one in the perimeter wins, exactly as
+# doors do - the fallback reuses decide_from_doors rather than duplicating the rule.
+env = [
+    header(800, 1.0, 0.0, edge_m=2.4, name="interior header"),
+    header(1200, 0.0, 1.0, edge_m=0.08, name="MAIN opening"),
+    header(900, 1.0, 0.0, edge_m=0.9, name="side header"),
+]
+r = decide(env)
+check("door-less env: widest perimeter opening wins",
+      r["main_door"]["name"] == "MAIN opening", r["main_door"]["name"])
+check("  -> walk-in along X -> FURRING_RUN_NS = True",
+      r["walk_in_axis"] == "x" and r["furring_run_ns"] is True)
+check("  the adaptive band still excludes the deeper headers",
+      len([d for d in env if d["exterior"]]) == 1)
+
+# A header too narrow to be a doorway is rejected by the same width floor doors use.
+r = decide([header(400, 1.0, 0.0)])
+check("a 400 mm header is not a doorway", r["furring_run_ns"] is None)
+
 bad = len([f for f in fails if not f])
 print("\n{} / {} checks passed".format(len(fails) - bad, len(fails)))
 sys.exit(1 if bad else 0)

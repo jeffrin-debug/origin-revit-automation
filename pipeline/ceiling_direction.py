@@ -30,10 +30,13 @@
 # ============================================================
 
 import math
+import re
+import traceback
 
 from Autodesk.Revit.DB import *
 
 FT_PER_M = 1.0 / 0.3048
+FT_PER_MM = 1.0 / 304.8
 
 CFG = {
     # Absolute ceiling on how far in from the footprint boundary can still count as "at the edge
@@ -51,6 +54,18 @@ CFG = {
     "NO_PERIMETER_DOOR_M": 1.0,
     # Anything narrower than this is a cupboard or a hatch, not a way in.
     "MIN_DOOR_WIDTH_FT": 2.0,
+
+    # --- fallback for envs with no Door elements (2026-09-18) ------------------------------
+    # Six of the envs model a doorway as a bare GAP in the wall with a short header wall above
+    # it, and carry no OST_Doors element at all (409 x3, PH2A x2, Project2 - PH1 B). Those
+    # headers sit exactly over the openings, so they carry the same two facts a door does: how
+    # wide the opening is, and which way you walk through it.
+    "HEADER_FALLBACK": True,
+    # Bounds on what counts as a doorway header rather than an ordinary upper wall segment.
+    # Same numbers the ceiling rebuild uses in close_openings_above_plane, for the same reason:
+    # too loose and every upper wall segment is swept up.
+    "MAX_DOOR_HEAD_MM": 2600.0,
+    "MAX_OPENING_WIDTH_MM": 2500.0,
 }
 
 
@@ -306,6 +321,135 @@ def collect_doors(doc, footprint, cfg=None):
 # The decision
 # ------------------------------------------------------------
 
+def _lowest_storey_plane(doc):
+    """The elevation Revit measures rooms at, on the lowest level that actually has walls.
+
+    Every env in this set is single-storey (the ceiling rebuild's storey classifier skips the
+    upper levels on all of them), so one plane is enough. On a genuine multi-storey model this
+    would only find the ground floor's doorways - acceptable, since the site's main entrance is
+    on the ground floor by definition.
+    """
+    levels = list(FilteredElementCollector(doc).OfClass(Level).WhereElementIsNotElementType())
+    levels.sort(key=lambda lv: lv.Elevation)
+    counts = {}
+    for w in FilteredElementCollector(doc).OfClass(Wall).WhereElementIsNotElementType():
+        try:
+            lid = eid_value(w.LevelId)
+            counts[lid] = counts.get(lid, 0) + 1
+        except Exception:
+            continue
+    for lv in levels:
+        if counts.get(eid_value(lv.Id), 0) > 0:
+            try:
+                p = lv.get_Parameter(BuiltInParameter.LEVEL_ROOM_COMPUTATION_HEIGHT)
+                return lv.Elevation + (p.AsDouble() if p else 0.0), lv.Name
+            except Exception:
+                return lv.Elevation, lv.Name
+    return None, None
+
+
+def collect_header_openings(doc, footprint, cfg=None):
+    """Doorways in envs that carry no Door element, found by their header walls.
+
+    These models cut a real GAP in the wall and put a short header wall above it. At the height
+    Revit measures rooms there is simply nothing in the opening - which is why the ceiling
+    rebuild has to trace those headers down to close them. The same header tells us what a door
+    would have: it is exactly as long as the opening and sits exactly over it.
+
+    A candidate is a header when it starts ABOVE the room computation plane, its underside is
+    below MAX_DOOR_HEAD_MM (a door head, not high up the storey), it is no longer than
+    MAX_OPENING_WIDTH_MM, and the plane underneath it is EMPTY. That last test is what makes it
+    an opening rather than an ordinary wall stacked on another wall.
+
+    Returns rows in exactly the shape collect_doors returns, so the same decision runs on both.
+    """
+    cfg = cfg or CFG
+    plane_ft, level_name = _lowest_storey_plane(doc)
+    if plane_ft is None:
+        return []
+
+    head_cap_ft = plane_ft + cfg["MAX_DOOR_HEAD_MM"] * FT_PER_MM
+    max_len_ft = cfg["MAX_OPENING_WIDTH_MM"] * FT_PER_MM
+    band_ft = cfg["EXTERIOR_BAND_M"] * FT_PER_M
+
+    walls = []
+    for w in FilteredElementCollector(doc).OfClass(Wall).WhereElementIsNotElementType():
+        try:
+            bb = w.get_BoundingBox(None)
+            if bb is None:
+                continue
+            walls.append((w, bb))
+        except Exception:
+            continue
+
+    # Walls that DO exist at the plane. A candidate sitting over one of these is an ordinary
+    # wall above a wall, not an opening.
+    at_plane = []
+    for (w, bb) in walls:
+        if bb.Min.Z <= plane_ft + 1e-6 <= bb.Max.Z + 1e-6:
+            at_plane.append((bb.Min.X, bb.Min.Y, bb.Max.X, bb.Max.Y))
+
+    def _covered(mx, my):
+        pad = 0.05
+        for (x0, y0, x1, y1) in at_plane:
+            if x0 - pad <= mx <= x1 + pad and y0 - pad <= my <= y1 + pad:
+                return True
+        return False
+
+    out = []
+    for (w, bb) in walls:
+        try:
+            rb = w.get_Parameter(BuiltInParameter.WALL_ATTR_ROOM_BOUNDING)
+            if rb is not None and rb.AsInteger() != 1:
+                continue
+            if not (bb.Min.Z > plane_ft + 1e-6 and bb.Min.Z < head_cap_ft - 1e-6):
+                continue
+            loc = w.Location
+            crv = loc.Curve if isinstance(loc, LocationCurve) else None
+            if crv is None:
+                continue
+            a = crv.GetEndPoint(0)
+            b = crv.GetEndPoint(1)
+            span = a.DistanceTo(b)
+            if span < 0.01 or span > max_len_ft:
+                continue
+            mx, my = (a.X + b.X) / 2.0, (a.Y + b.Y) / 2.0
+            if _covered(mx, my):
+                continue
+
+            # You walk through an opening perpendicular to the wall it is cut into.
+            dx, dy = b.X - a.X, b.Y - a.Y
+            L = math.hypot(dx, dy)
+            if L < 1e-9:
+                continue
+            facing = (-dy / L, dx / L)
+
+            row = {
+                "id": eid_value(w.Id),
+                "name": "doorway header (no Door element)",
+                "x": round(mx, 4), "y": round(my, 4),
+                "host_wall_id": eid_value(w.Id),
+                "width_ft": round(span, 4),
+                "width_mm": round(span * 304.8, 1),
+                "facing": (round(facing[0], 6), round(facing[1], 6)),
+                "facing_source": "header wall normal",
+                "header_underside_mm": round(bb.Min.Z * 304.8, 1),
+            }
+            if footprint:
+                d = dist_to_boundary(mx, my, footprint)
+                row["dist_to_edge_ft"] = round(d, 3)
+                row["dist_to_edge_m"] = round(d / FT_PER_M, 3)
+                row["exterior"] = d <= band_ft
+            else:
+                row["dist_to_edge_ft"] = None
+                row["exterior"] = False
+            row["usable"] = span >= cfg["MIN_DOOR_WIDTH_FT"]
+            out.append(row)
+        except Exception:
+            continue
+    return out
+
+
 def decide_from_doors(doors, cfg=None):
     """The decision itself, given door rows: which way does the ceiling framing run.
 
@@ -397,19 +541,89 @@ def resolve_direction(doc, cfg=None):
     """
     cfg = cfg or CFG
     footprint, fsrc = building_footprint(doc)
+
     doors = collect_doors(doc, footprint, cfg)
     res = decide_from_doors(doors, cfg)
-    res["footprint_source"] = fsrc
+    res["source"] = "Door elements"
     res["doors"] = doors
+
+    # No usable Door element: try the doorway HEADERS instead. Six envs model every doorway as
+    # a bare gap with a header above and carry no Door at all, and those headers hold the same
+    # two facts - how wide the opening is and which way you walk through it.
+    if not res.get("ok") and cfg.get("HEADER_FALLBACK", True):
+        headers = collect_header_openings(doc, footprint, cfg)
+        if headers:
+            alt = decide_from_doors(headers, cfg)
+            alt["source"] = "doorway headers (this model has no Door elements)"
+            alt["doors"] = headers
+            alt["door_attempt"] = res.get("reason")
+            if alt.get("ok"):
+                alt["footprint_source"] = fsrc
+                if not footprint:
+                    alt["warnings"].append(
+                        "no footprint could be built - every opening counts as interior")
+                return alt
+            # Neither worked; report the header attempt too rather than only the door one.
+            res["header_attempt"] = alt.get("reason")
+            res["headers_found"] = len(headers)
+
+    res["footprint_source"] = fsrc
     if not footprint:
         res["warnings"].append("no footprint could be built - every door counts as interior")
     return res
 
 
+def apply_to_source(doc, src, cfg=None):
+    """Rewrite FURRING_RUN_NS in the ceiling generator's SOURCE STRING for this document.
+
+    The single place the rule is applied, so every route into the generator gets it: stage 2,
+    the origin CLI, the standalone ceiling batch and the live wrapper. Before this existed the
+    rule lived in stage2_panels only, and the two routes that exec the generator directly kept
+    the hard-coded default.
+
+    The generator file on disk is NEVER modified - it belongs to a separate repository. Only the
+    string about to be compiled is touched.
+
+    Returns (src, info). When the direction cannot be resolved, src comes back unchanged and the
+    generator's own default applies: a model with no doorway to read must not stop the panels.
+    """
+    info = {"applied": False}
+    try:
+        res = resolve_direction(doc, cfg)
+        # The full opening list can be long; keep the decision and the runners-up.
+        info["decision"] = dict((k, v) for k, v in res.items() if k != "doors")
+        info["summary"] = describe(res)
+
+        want = res.get("furring_run_ns")
+        if want is None:
+            info["skipped"] = res.get("reason")
+            return src, info
+
+        pat = re.compile(r"^(FURRING_RUN_NS)\s*=\s*[^\n#]+", re.MULTILINE)
+        m = pat.search(src)
+        if m is None:
+            info["skipped"] = "no FURRING_RUN_NS assignment found in the generator"
+            return src, info
+
+        info["was"] = m.group(0).split("=", 1)[1].strip()
+        info["now"] = str(want)
+        src = pat.sub("FURRING_RUN_NS = " + str(want), src, count=1)
+        info["applied"] = True
+    except Exception:
+        # Never let direction resolution take a panel run down with it.
+        info["error"] = traceback.format_exc()[-800:]
+    return src, info
+
+
 def describe(res):
     if not res.get("ok"):
-        return "ceiling direction: UNRESOLVED - {}".format(res.get("reason"))
+        msg = "ceiling direction: UNRESOLVED - {}".format(res.get("reason"))
+        if res.get("header_attempt"):
+            msg += " (and {} doorway header(s): {})".format(
+                res.get("headers_found"), res["header_attempt"])
+        return msg
+    src = res.get("source") or "Door elements"
     return ("ceiling direction: furring along {}, boards' long edge along {} "
-            "(FURRING_RUN_NS={}) - {}".format(
+            "(FURRING_RUN_NS={}) - via {} - {}".format(
                 res["furring_runs_along"], res["boards_long_edge_along"],
-                res["furring_run_ns"], res["reason"]))
+                res["furring_run_ns"], src, res["reason"]))

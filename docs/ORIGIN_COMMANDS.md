@@ -120,6 +120,15 @@ How the main door is found:
 3. Of those, the **widest** is the main entrance; distance breaks a tie between equal widths.
 4. Its facing direction is the walk-in direction, snapped to the nearer world axis.
 
+**If the model has no `OST_Doors` elements at all** — some envs cut a bare gap in the wall with
+only a short header above it — it falls back to those **doorway headers**. A header sits exactly
+over its opening, so it carries the same two facts a door does: how wide the opening is, and
+which way you walk through it. Same perimeter and widest-wins rule from there. Affects 409 (×3),
+PH2A (×2) and Project2 - PH1 B.
+
+The printed line says which source was used: `via Door elements` or
+`via doorway headers (this model has no Door elements)`.
+
 The run prints what it decided:
 
 ```
@@ -134,12 +143,13 @@ Things it will tell you rather than guess silently:
 
 | Message | Meaning |
 |---|---|
-| `direction NOT applied: no OST_Doors elements…` | This env models doorways as bare gaps with a header wall above — there is no door to read. The generator keeps its own default; nothing breaks. |
+| `direction NOT applied: …` | Neither a Door element nor a doorway header could be read. The generator keeps its own default; nothing breaks. |
 | `! closest door is N m from the footprint edge` | No door is really in an exterior wall, so the pick is a guess. Worth a look. |
 | `! main door faces N deg off the X axis` | The site is rotated. The grid is snapped to the nearer axis, which fits poorly past ~20°. |
 
 Tuning lives at the top of `origin_pipeline\ceiling_direction.py` — `EDGE_CLUSTER_M` (0.30),
-`EXTERIOR_BAND_M` (2.0 cap), `NO_PERIMETER_DOOR_M` (1.0) and `MIN_DOOR_WIDTH_FT` (2.0). Set
+`EXTERIOR_BAND_M` (2.0 cap), `NO_PERIMETER_DOOR_M` (1.0), `MIN_DOOR_WIDTH_FT` (2.0), and for the
+fallback `HEADER_FALLBACK` (True), `MAX_DOOR_HEAD_MM` (2600) and `MAX_OPENING_WIDTH_MM` (2500). Set
 `CEILING_DIRECTION_FROM_DOOR = False` in `stage2_panels.py` to hand the generator back its own
 hard-coded direction.
 
@@ -154,6 +164,10 @@ one won and why.
 
 The drywall repo is **never modified** — the `FURRING_RUN_NS` assignment is rewritten in the
 source string in memory, just before it is compiled.
+
+**Every route into the ceiling generator applies this**, sharing one implementation
+(`ceiling_direction.apply_to_source`): the `origin` commands, the batch pipeline,
+`run_drywall_on_ceilings.py`, and `ceiling_rebuild_run.py` with `PANELISE = True`.
 
 ---
 

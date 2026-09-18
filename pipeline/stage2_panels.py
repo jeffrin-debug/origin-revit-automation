@@ -95,49 +95,20 @@ def collect_targets(doc):
 
 
 def _apply_ceiling_direction(doc, src, report):
-    """Set the ceiling generator's FURRING_RUN_NS from this site's main door.
+    """Set the ceiling generator's FURRING_RUN_NS from this site's main doorway.
 
-    The repo file is never modified. The assignment is rewritten in the source STRING about to
-    be compiled - the same mechanism run_drywall_on_ceilings.py already uses for layout
-    overrides, and the reason the drywall repo can stay untouched while its behaviour is driven
-    from here.
-
-    If the direction cannot be resolved (an env whose doorways are bare gaps with no Door
-    element, say) the source comes back unchanged and the generator's own default applies. That
-    is a reported outcome, not a failure - a missing door must not stop the panels.
+    The rule itself lives in ceiling_direction.apply_to_source, so every route into the
+    generator shares one implementation - this one, the standalone ceiling batch, and the live
+    wrapper. The generator file is never modified; only the source string about to be compiled.
     """
-    info = {"applied": False}
     try:
         ns = {"__name__": "ceiling_direction"}
         p = os.path.join(ROOT, "ceiling_direction.py")
         ns["__file__"] = p
         exec(compile(open(p).read(), p, "exec"), ns)
-
-        res = ns["resolve_direction"](doc)
-        # The full door list can be long; keep the decision and the runners-up, drop the rest.
-        info["decision"] = dict((k, v) for k, v in res.items() if k != "doors")
-        info["summary"] = ns["describe"](res)
-
-        want = res.get("furring_run_ns")
-        if want is None:
-            info["skipped"] = res.get("reason")
-            report["ceiling_direction"] = info
-            return src
-
-        pat = re.compile(r"^(FURRING_RUN_NS)\s*=\s*[^\n#]+", re.MULTILINE)
-        m = pat.search(src)
-        if m is None:
-            info["skipped"] = "no FURRING_RUN_NS assignment found in the generator"
-            report["ceiling_direction"] = info
-            return src
-
-        info["was"] = m.group(0).split("=", 1)[1].strip()
-        info["now"] = str(want)
-        src = pat.sub("FURRING_RUN_NS = " + str(want), src, count=1)
-        info["applied"] = True
+        src, info = ns["apply_to_source"](doc, src)
     except Exception:
-        # Never let direction resolution take the panel run down with it.
-        info["error"] = traceback.format_exc()[-800:]
+        info = {"applied": False, "error": traceback.format_exc()[-800:]}
     report["ceiling_direction"] = info
     return src
 
