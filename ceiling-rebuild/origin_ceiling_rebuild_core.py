@@ -64,7 +64,28 @@ CFG = {
     # How close a created ceiling must land to its room's wall top, and how far below it is
     # allowed to sit at all ("it should not be below the wall level").
     "WALL_TOP_TOL_MM": 1.0,
+    # The LOWER ceiling wins (user direction, 2026-09-25). Where a level already has an authored
+    # (dropped) ceiling, every ceiling this script cuts on that level follows the LOWEST of them
+    # instead of its own room's wall top, and a top-layer ceiling sitting above it is recut down
+    # to it. Without this, 1F got 9 ft ceilings (the wall top) right next to its authored 8 ft
+    # ones, so a wall face running under both had its drywall capped at 8 ft and a bare 8-9 ft
+    # band under the 9 ft ceiling (wall 008 face A, and walls 011/012/016). Studs still run to
+    # the wall top above the ceiling. False restores "each room at its own wall top".
+    # Turned OFF 2026-09-25 (user direction, same day): "height per room" - every room's ceiling
+    # sits at that room's own height. The wall generator now follows the ceiling over each STRETCH
+    # of a wall face (origin_pipeline/wall_ceiling_profile.py), so rooms at different heights no
+    # longer leave a bare band on a shared wall. Kept as an option.
+    "FOLLOW_LOWER_AUTHORED_CEILING": False,
 }
+
+FOLLOW_SOURCE = "follows the lower authored ceiling"
+
+# Every ceiling this script creates carries this in its Comments. Without it a ceiling the
+# script itself cut at a non-wall-top height (e.g. under FOLLOW_LOWER_AUTHORED_CEILING) is
+# indistinguishable from one a person dropped on purpose, and would be kept as "authored"
+# forever. A tagged ceiling is never an authored drop: it is top layer, recut when its height
+# no longer matches its room.
+CREATED_TAG = "ORIGIN_CEILING_REBUILD created"
 
 FT_PER_MM = 1.0 / 304.8
 
@@ -396,6 +417,11 @@ def collect_ceilings(doc, warnings):
     out = []
     for c in FilteredElementCollector(doc).OfClass(Ceiling).WhereElementIsNotElementType():
         row = {"id": eid_value(c.Id), "is_ceiling_category": is_ceiling_category(c)}
+        try:
+            p = c.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
+            row["created_by_script"] = CREATED_TAG in ((p.AsString() or "") if p else "")
+        except Exception:
+            row["created_by_script"] = False
         try:
             row["category"] = c.Category.Name
         except Exception:
@@ -1114,7 +1140,7 @@ def match_ceilings_to_regions(regions, ceilings, cfg=None):
         drop_ft = None if (wt is None or cz is None) else (wt - cz)
         c["drop_below_wall_top_mm"] = None if drop_ft is None else round(drop_ft * 304.8, 1)
 
-        if drop_ft is not None and drop_ft > drop_min_ft:
+        if drop_ft is not None and drop_ft > drop_min_ft and not c.get("created_by_script"):
             ceiling_status[cid] = "keep"
             c["keep_reason"] = ("authored drop: {} mm below room {}'s wall top"
                                 .format(round(drop_ft * 304.8, 1), r["room_id"]))
@@ -1122,6 +1148,19 @@ def match_ceilings_to_regions(regions, ceilings, cfg=None):
             continue
 
         single.append((c, r, bool(full)))
+
+    # --- the level's reference height: its lowest authored drop ------------------------------
+    follow_z = {}                # level id -> (bottom z ft, ceiling id)
+    if cfg_val(cfg, "FOLLOW_LOWER_AUTHORED_CEILING", False):
+        by_cid = dict((c["id"], c) for c in usable)
+        for ids in region_authored.values():
+            for cid in ids:
+                c = by_cid.get(cid)
+                if c is None or c.get("bottom_z_ft") is None:
+                    continue
+                lid = c.get("level_id")
+                if lid not in follow_z or c["bottom_z_ft"] < follow_z[lid][0]:
+                    follow_z[lid] = (c["bottom_z_ft"], cid)
 
     # --- pass 2: the top layer -------------------------------------------------------------
     region_top_exact = {}        # region idx -> ceiling id
@@ -1132,6 +1171,25 @@ def match_ceilings_to_regions(regions, ceilings, cfg=None):
             c["delete_reason"] = ("top layer over room {}, which already has an authored "
                                   "ceiling".format(r["room_id"]))
             continue
+        ref = follow_z.get(r.get("level_id"))
+        if (ref is not None and c.get("bottom_z_ft") is not None
+                and c["bottom_z_ft"] - ref[0] > drop_min_ft):
+            ceiling_status[cid] = "delete"
+            c["delete_reason"] = ("top layer at {} mm, above this level's lower authored ceiling "
+                                  "{} at {} mm - recut down to it".format(
+                                      round(c["bottom_z_ft"] * 304.8, 1), ref[1],
+                                      round(ref[0] * 304.8, 1)))
+            continue
+        # One of OUR ceilings no longer at the height its room would get today (the room's walls,
+        # or the level reference when FOLLOW_LOWER_AUTHORED_CEILING is on) - recut it.
+        if c.get("created_by_script") and c.get("bottom_z_ft") is not None:
+            target = ref[0] if ref is not None else r.get("wall_top_ft")
+            if target is not None and abs(c["bottom_z_ft"] - target) > drop_min_ft:
+                ceiling_status[cid] = "delete"
+                c["delete_reason"] = ("created by this script at {} mm, but room {} is now {} mm - "
+                                      "recut".format(round(c["bottom_z_ft"] * 304.8, 1),
+                                                     r["room_id"], round(target * 304.8, 1)))
+                continue
         if is_full:
             ca = c.get("poly_area_sf")
             ra = r["poly_area_sf"]
@@ -1162,7 +1220,10 @@ def match_ceilings_to_regions(regions, ceilings, cfg=None):
             ceiling_status[cid] = "leave (excluded category)"
         ceiling_status.setdefault(cid, "delete")
 
-    result = {"regions": [], "ceilings": [], "ambiguities": ambiguities}
+    result = {"regions": [], "ceilings": [], "ambiguities": ambiguities,
+              # level id -> {"z_ft", "ceiling_id"}: the height region_ceiling_height() follows
+              "follow_z_by_level": dict((lid, {"z_ft": z, "ceiling_id": cid})
+                                        for lid, (z, cid) in follow_z.items())}
     area_by_id = dict((c["id"], c.get("poly_area_sf") or 0.0) for c in ceilings)
 
     for r in regions:
@@ -1387,6 +1448,15 @@ def region_ceiling_height(doc, region, level, ceilings, plan, warnings, cfg=None
     """
     cfg = cfg or CFG
     z = region.get("wall_top_ft")
+
+    # The lower authored ceiling wins (FOLLOW_LOWER_AUTHORED_CEILING): never cut a ceiling above
+    # the level's lowest authored drop, so no wall face ends up under two ceiling heights.
+    ref = ((plan or {}).get("follow_z_by_level") or {}).get(region.get("level_id"))
+    if ref is not None and (z is None or ref["z_ft"] < z):
+        return ref["z_ft"], "{} {} ({} mm; room's own walls reach {} mm)".format(
+            FOLLOW_SOURCE, ref["ceiling_id"], round(ref["z_ft"] * 304.8, 1),
+            None if z is None else round(z * 304.8, 1))
+
     if z is not None:
         info = region.get("wall_top_info") or {}
         return z, "room's own bounding walls ({} of {} at {} mm)".format(
@@ -1601,6 +1671,12 @@ def create_ceiling_for_region(doc, region, type_id, level, abs_z_ft, warnings):
             p.Set(offset_ft)
     except Exception as ex:
         warnings.append("Room {}: height offset not set ({})".format(region["room_id"], ex))
+    try:
+        p = c.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
+        if p is not None and not p.IsReadOnly:
+            p.Set(CREATED_TAG)
+    except Exception as ex:
+        warnings.append("Room {}: created-by tag not set ({})".format(region["room_id"], ex))
     return c, None
 
 
@@ -1938,6 +2014,8 @@ def verify_document(doc, regions, plan, report, cfg, level_by_id):
         wt = row.get("wall_top_mm")
         if c is None or wt is None or c.get("bottom_z_ft") is None:
             continue
+        if str(row.get("height_source") or "").startswith(FOLLOW_SOURCE):
+            continue            # below the wall top ON PURPOSE: it follows the lower ceiling
         got = round(c["bottom_z_ft"] * 304.8, 1)
         if wt - got > tol_mm:
             below.append({"ceiling_id": row["ceiling_id"], "room_id": row.get("room_id"),
@@ -1957,7 +2035,7 @@ def verify_document(doc, regions, plan, report, cfg, level_by_id):
     # ceilings - Project5 has a datum "Level 3" at 2387.6 mm which is exactly where that
     # model's real ceilings sit, and V6 was failing the file for matching them.
     EXEMPT_HEIGHT_SOURCES = ("room's own bounding walls", "level modal wall top",
-                             "existing correct ceilings")
+                             "existing correct ceilings", FOLLOW_SOURCE)
     slab_hits = []
     for row in report["created"]:
         c = by_id.get(row["ceiling_id"])

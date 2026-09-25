@@ -210,6 +210,18 @@ else:
                 "direction_applied": cd.get("applied"),
                 "direction_skipped": cd.get("skipped"),
                 "direction_warnings": ((cd.get("decision") or {}).get("warnings") or [])[:3],
+                "door_head_courses": dict((k, v[:5] if isinstance(v, list) else v)
+                                          for k, v in (prep.get("door_head_courses") or {}).items()),
+                "infill_merge": dict((k, v[:5] if isinstance(v, list) else v)
+                                     for k, v in (prep.get("infill_merge") or {}).items()),
+                "soffit_raise": prep.get("soffit_raise"),
+                "wall_end_joints": prep.get("wall_end_joints"),
+                "wall_end_joint_fix": prep.get("wall_end_joint_fix"),
+                "wall_narrow_merge": prep.get("wall_narrow_merge"),
+                "ceiling_end_joints": prep.get("ceiling_end_joints"),
+                "soffit_walls": prep.get("soffit_walls"),
+                "ceiling_l_merge": prep.get("ceiling_l_merge"),
+                "orphan_ceiling_assemblies": prep.get("orphan_ceiling_assemblies"),
                 "error": prep.get("error"),
             })
         except Exception:
@@ -221,6 +233,28 @@ else:
                 pass
         row["sec"] = round(time.time() - t0, 2)
         res["panels"] = row
+
+        # --- keep the panels-only export view current ------------------------------------
+        # Built on every panel run so it is never stale and never has to be remembered. It is
+        # rule-based (a Mark filter), so it needs no element list - but the VIEW and its
+        # filters still have to exist in THIS document, and each env is its own document.
+        if row.get("ok"):
+            try:
+                pv = {"__name__": "panels_only_view"}
+                pv_path = os.path.join(ROOT, "panels_only_view.py")
+                pv["__file__"] = pv_path
+                exec(compile(open(pv_path).read(), pv_path, "exec"), pv)
+                pout = pv.get("OUT") or {}
+                res["panels_only_view"] = {
+                    "status": pout.get("status"),
+                    "view": pout.get("view"),
+                    "visible": (pout.get("visible_in_view") or {}).get("panels"),
+                    "clean": pout.get("clean"),
+                    "leaked": pout.get("leaked"),
+                }
+            except Exception:
+                res["panels_only_view"] = {"status": "error",
+                                           "error": traceback.format_exc()[-500:]}
 
     res["ok"] = all(res.get(k, {}).get("ok", True) for k in ("ceiling", "panels"))
 

@@ -32,6 +32,7 @@ clr.AddReference('RevitServices')
 
 from Autodesk.Revit.DB import *
 from RevitServices.Transactions import TransactionManager
+from System.Collections.Generic import List
 
 
 # Paths resolve from this file's own location - see origin_paths.py. Nothing below is tied to
@@ -48,6 +49,39 @@ ROOT = _paths["PIPELINE_ROOT"]
 # hard-coded module constant, so one rule covers every env (see ceiling_direction.py). Set
 # False to hand the generator back its own default.
 CEILING_DIRECTION_FROM_DOOR = True
+
+# Hang a wall 4 + 2 + 4 ft instead of 4 + 4 + 2 ft where a door head would otherwise land right on
+# a row joint (an 8 ft door; a 7 ft door is unaffected) - see door_head_courses.py. Set False to
+# hand the generator back its own floor-up 4 ft rows everywhere.
+DOOR_HEAD_COURSES = True
+
+# Fold the wall generator's corner-infill strips into the coplanar board beside them instead of
+# leaving a separate 5/8in piece - see infill_merge.py. Strips with no such board are left as the
+# generator made them, so no stud is ever exposed. Set False to keep every strip.
+MERGE_CORNER_INFILL = True
+
+# Outside corners: one board laps to the other wall's outer face, the other butts behind it, so
+# the two meet instead of both stopping at the centreline - see corner_lap.py. False restores the
+# generator's own "both end at the touch point" rule.
+OUTSIDE_CORNER_LAP = True
+
+# Wall drywall follows the ceiling over each STRETCH of a face, not the lowest ceiling anywhere
+# along it - needed now that every room keeps its own ceiling height. See wall_ceiling_profile.py.
+WALL_CAP_PER_STRETCH = True
+
+# No board joint closer to a wall than one full 16 in framing bay, on walls and ceilings alike -
+# see wall_end_joints.py / ceiling_end_joints.py. False keeps the generators' own layout.
+END_JOINT_MIN_BAY = True
+
+# Recognise soffits drawn as ordinary short raised walls (no name or type needed) and board their
+# underside - see soffit_detect.py for the rule. False leaves such walls as plain two-sided walls.
+DETECT_SOFFIT_WALLS = True
+
+# Rejoin ceiling boards the generator split with no wall on the seam - L-shaped results included,
+# as long as the pair still fits one 4x8 sheet - see ceiling_l_merge.py. False keeps the split.
+CEILING_L_MERGE = True
+CEILING_MANIFEST = "origin_ceiling_manifest_notaper_noscrew_nojoint.json"
+WALL_MANIFEST = "origin_assembly_manifest_notaper_noscrew_nojoint.json"
 
 # Order matters: walls first (they own the corner/butt logic every other generator measures
 # against), then ceilings, then the self-collecting plugins.
@@ -113,6 +147,57 @@ def _apply_ceiling_direction(doc, src, report):
     return src
 
 
+def _purge_orphan_ceiling_assemblies(doc):
+    """Delete ceiling-generator output (boards, furring, mains) whose host ceiling no longer exists.
+
+    The ceiling generator cleans up only the ceilings it is processing, matched by CEILING=C<eid>.
+    When stage 1 recuts a ceiling it gets a NEW ElementId, so everything built for the old one is
+    never matched again and stays behind - found 2026-09-25: 58 elements from the five 9 ft ceilings
+    replaced at 8 ft, still floating at 9 ft over the new ceilings. Only elements carrying the
+    generator's own tag AND a CEILING= token for an id that is gone are touched."""
+    live = set()
+    for c in FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Ceilings) \
+            .WhereElementIsNotElementType():
+        live.add("C{}".format(c.Id.IntegerValue if hasattr(c.Id, "IntegerValue") else c.Id.Value))
+    for c in FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_RoofSoffit) \
+            .WhereElementIsNotElementType():
+        live.add("C{}".format(c.Id.IntegerValue if hasattr(c.Id, "IntegerValue") else c.Id.Value))
+    gone, hosts = [], set()
+    for ds in FilteredElementCollector(doc).OfClass(DirectShape).WhereElementIsNotElementType():
+        p = ds.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)
+        cm = (p.AsString() or "") if p else ""
+        if not cm.startswith("ORIGIN_CEILING_V1 |"):
+            continue
+        tok = [t.strip()[8:] for t in cm.split("|") if t.strip().startswith("CEILING=")]
+        if tok and tok[0] not in live:
+            gone.append(ds.Id)
+            hosts.add(tok[0])
+    if not gone:
+        return {"deleted": 0}
+    try:
+        TransactionManager.Instance.ForceCloseTransaction()
+    except Exception:
+        pass
+    TransactionManager.Instance.EnsureInTransaction(doc)
+    try:
+        ids = List[ElementId]()
+        for i in gone:
+            ids.Add(i)
+        doc.Delete(ids)
+    finally:
+        TransactionManager.Instance.TransactionTaskDone()
+        TransactionManager.Instance.ForceCloseTransaction()
+    return {"deleted": len(gone), "former_ceilings": sorted(hosts)}
+
+
+def _load_door_head_courses():
+    ns = {"__name__": "door_head_courses"}
+    p = os.path.join(ROOT, "door_head_courses.py")
+    ns["__file__"] = p
+    exec(compile(open(p).read(), p, "exec"), ns)
+    return ns
+
+
 def run_on_document(doc, manifest_dir=None, only=None):
     """Run the generators against `doc`.
 
@@ -159,11 +244,86 @@ def run_on_document(doc, manifest_dir=None, only=None):
         if kind:
             ns["IN"][0] = targets[kind]
 
+        # Soffits: raise any that falls short of the ceiling beside it BEFORE its boards are made,
+        # then tell the walls generator which walls are soffits (each face stops at its own
+        # ceiling, however close to the soffit's base). See soffit_detect.py.
+        if label == "walls" and DETECT_SOFFIT_WALLS:
+            try:
+                sd0 = {"__name__": "soffit_detect"}
+                sdp0 = os.path.join(ROOT, "soffit_detect.py")
+                sd0["__file__"] = sdp0
+                exec(compile(open(sdp0).read(), sdp0, "exec"), sd0)
+                report["soffit_raise"] = sd0["raise_to_ceiling"](doc)
+                ns["ORIGIN_SOFFIT_WALL_IDS"] = sd0["soffit_wall_ids"](doc)
+            except Exception:
+                report["soffit_raise"] = {"error": traceback.format_exc()[-800:]}
+
+        dhc = None
         try:
             src = open(path).read()
+            if label == "ceilings":
+                try:
+                    report["orphan_ceiling_assemblies"] = _purge_orphan_ceiling_assemblies(doc)
+                except Exception:
+                    report["orphan_ceiling_assemblies"] = {"error": traceback.format_exc()[-800:]}
             if label == "ceilings" and CEILING_DIRECTION_FROM_DOOR:
                 src = _apply_ceiling_direction(doc, src, report)
+            if label == "walls":
+                # Always on: a plain bug fix, not a layout choice - see infill_z_fix.py.
+                try:
+                    zf = {"__name__": "infill_z_fix"}
+                    zfp = os.path.join(ROOT, "infill_z_fix.py")
+                    zf["__file__"] = zfp
+                    exec(compile(open(zfp).read(), zfp, "exec"), zf)
+                    src, report["infill_z_fix"] = zf["apply_to_source"](src)
+                except Exception:
+                    report["infill_z_fix"] = {"applied": False,
+                                              "error": traceback.format_exc()[-800:]}
+            if label == "walls" and WALL_CAP_PER_STRETCH:
+                try:
+                    wp = {"__name__": "wall_ceiling_profile"}
+                    wpp = os.path.join(ROOT, "wall_ceiling_profile.py")
+                    wp["__file__"] = wpp
+                    exec(compile(open(wpp).read(), wpp, "exec"), wp)
+                    src, report["wall_ceiling_profile"] = wp["apply_to_source"](src)
+                except Exception:
+                    report["wall_ceiling_profile"] = {"applied": False,
+                                                      "error": traceback.format_exc()[-800:]}
+            if label == "walls" and OUTSIDE_CORNER_LAP:
+                try:
+                    cl = {"__name__": "corner_lap"}
+                    clp = os.path.join(ROOT, "corner_lap.py")
+                    cl["__file__"] = clp
+                    exec(compile(open(clp).read(), clp, "exec"), cl)
+                    src, report["corner_lap"] = cl["apply_to_source"](src)
+                except Exception:
+                    report["corner_lap"] = {"applied": False, "error": traceback.format_exc()[-800:]}
+            if label == "walls" and DOOR_HEAD_COURSES:
+                try:
+                    dhc = _load_door_head_courses()
+                    src, report["door_head_courses"] = dhc["apply_to_source"](src)
+                except Exception:
+                    report["door_head_courses"] = {"applied": False,
+                                                   "error": traceback.format_exc()[-800:]}
+            # End joints: no board joint closer than one 16 in bay to a wall, on walls (joint moved
+            # to a stud) and ceilings (joint moved by whole furring bays).
+            ej = None
+            if END_JOINT_MIN_BAY and label in ("walls", "ceilings"):
+                key = "wall_end_joints" if label == "walls" else "ceiling_end_joints"
+                try:
+                    ej = {"__name__": key}
+                    ejp = os.path.join(ROOT, key + ".py")
+                    ej["__file__"] = ejp
+                    exec(compile(open(ejp).read(), ejp, "exec"), ej)
+                    src, report[key] = ej["apply_to_source"](src)
+                except Exception:
+                    report[key] = {"applied": False, "error": traceback.format_exc()[-800:]}
+                    ej = None
             exec(compile(src, path, "exec"), ns)
+            if dhc is not None and report["door_head_courses"].get("applied"):
+                dhc["collect"](ns, report["door_head_courses"])
+            if ej is not None and report[key].get("applied"):
+                ej["collect"](ns, report[key])
             entry = _slim(ns.get("OUT"))
         except Exception:
             entry = {"FATAL": traceback.format_exc()}
@@ -175,6 +335,73 @@ def run_on_document(doc, manifest_dir=None, only=None):
                 pass
         entry["sec"] = round(time.time() - t0, 2)
         report["generators"][label] = entry
+
+        # Before the ceilings run, so every later generator measures against the final walls.
+        if label == "walls" and MERGE_CORNER_INFILL and "FATAL" not in entry:
+            try:
+                im = {"__name__": "infill_merge"}
+                imp = os.path.join(ROOT, "infill_merge.py")
+                im["__file__"] = imp
+                exec(compile(open(imp).read(), imp, "exec"), im)
+                rep = im["run"](doc, os.path.join(REPO, WALL_MANIFEST))
+                report["infill_merge"] = {
+                    "strips": rep.get("strips"), "merged": rep.get("merged_count", 0),
+                    "kept": rep.get("kept_count", 0),
+                    "merged_strips": [m["strip"] for m in rep.get("merged", [])],
+                    "redundant_deleted": rep.get("redundant_deleted", []),
+                    "kept_detail": rep.get("kept", [])[:30]}
+            except Exception:
+                report["infill_merge"] = {"error": traceback.format_exc()[-800:]}
+
+        # Wall end joints, second pass on the FINISHED boards: catches the short pieces the layout
+        # rule could not see (partition splits, end boards trimmed after layout) - see
+        # wall_end_joint_fix.py.
+        if label == "walls" and END_JOINT_MIN_BAY and "FATAL" not in entry:
+            try:
+                wf = {"__name__": "wall_end_joint_fix"}
+                wfp = os.path.join(ROOT, "wall_end_joint_fix.py")
+                wf["__file__"] = wfp
+                exec(compile(open(wfp).read(), wfp, "exec"), wf)
+                report["wall_end_joint_fix"] = wf["run"](doc)
+            except Exception:
+                report["wall_end_joint_fix"] = {"error": traceback.format_exc()[-800:]}
+            # Whatever is still narrow with no joint to move is folded into a same-plane
+            # neighbour if the pair still fits one 4 x 8 sheet - see wall_narrow_merge.py.
+            try:
+                nm = {"__name__": "wall_narrow_merge"}
+                nmp = os.path.join(ROOT, "wall_narrow_merge.py")
+                nm["__file__"] = nmp
+                exec(compile(open(nmp).read(), nmp, "exec"), nm)
+                report["wall_narrow_merge"] = nm["run"](doc)
+            except Exception:
+                report["wall_narrow_merge"] = {"error": traceback.format_exc()[-800:]}
+
+        if label == "ceilings" and CEILING_L_MERGE and "FATAL" not in entry:
+            try:
+                lm = {"__name__": "ceiling_l_merge"}
+                lmp = os.path.join(ROOT, "ceiling_l_merge.py")
+                lm["__file__"] = lmp
+                exec(compile(open(lmp).read(), lmp, "exec"), lm)
+                rep = lm["run"](doc, os.path.join(REPO, CEILING_MANIFEST))
+                report["ceiling_l_merge"] = {"merged": rep.get("merged", []),
+                                             "failed": rep.get("failed", [])[:20]}
+            except Exception:
+                report["ceiling_l_merge"] = {"error": traceback.format_exc()[-800:]}
+
+        if label == "walls" and DETECT_SOFFIT_WALLS and "FATAL" not in entry:
+            try:
+                sd = {"__name__": "soffit_detect"}
+                sdp = os.path.join(ROOT, "soffit_detect.py")
+                sd["__file__"] = sdp
+                exec(compile(open(sdp).read(), sdp, "exec"), sd)
+                rep = sd["run"](doc, os.path.join(REPO, WALL_MANIFEST))
+                report["soffit_walls"] = {
+                    "soffits": [(s.get("wall_mark") or s["id"]) for s in rep.get("soffits", [])],
+                    "underside_boards": rep.get("boards", []),
+                    "rejected": rep.get("rejected", [])[:20],
+                    "skipped": rep.get("skipped", [])[:20]}
+            except Exception:
+                report["soffit_walls"] = {"error": traceback.format_exc()[-800:]}
 
     # The generators end with TransactionTaskDone(), but under Dynamo's automatic transaction
     # strategy that only hands the transaction back - it stays open until the graph goes idle,

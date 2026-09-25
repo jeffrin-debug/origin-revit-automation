@@ -90,7 +90,10 @@ ceilings = [
     ceiling(108, H, 2940.0),                      # 60 mm under -> a real drop
 ]
 
-plan = match(regions, ceilings, CFG)
+# The decision table below is the "each room at its own wall top" rule, so it runs with the
+# lower-ceiling rule OFF. That rule has its own checks at the end.
+CFG_WALLTOP = dict(CFG, FOLLOW_LOWER_AUTHORED_CEILING=False)
+plan = match(regions, ceilings, CFG_WALLTOP)
 
 status = dict((c["id"], c["status"]) for c in plan["ceilings"])
 reason = dict((c["id"], c["reason"]) for c in plan["ceilings"])
@@ -142,9 +145,9 @@ for idx in sorted(EXPECT_R):
 print("\nTARGETED ASSERTIONS")
 
 
-def check(label, cond):
+def check(label, cond, extra=""):
     fails.append(bool(cond))
-    print("  {}  {}".format("PASS" if cond else "FAIL", label))
+    print("  {}  {}{}".format("PASS" if cond else "FAIL", label, ("  [" + extra + "]") if extra and not cond else ""))
 
 
 check("blanket deleted, not kept for any single room",
@@ -162,6 +165,67 @@ check("fully covered rooms report no bare area",
 check("50 mm drop threshold splits 30 mm (noise) from 60 mm (authored)",
       rstat[6]["status"] == "kept" and rstat[7]["status"] == "authored")
 check("no ambiguities raised", plan["ambiguities"] == [])
+
+# --- the lower authored ceiling wins (FOLLOW_LOWER_AUTHORED_CEILING, 2026-09-25) ------------
+# Same model with the rule ON: the lowest authored drop on the level (2700 mm, ceilings 102/103/
+# 105) becomes the height every cut ceiling follows, and the top-layer ceilings above it
+# (F 3000, G 2970) are recut down to it instead of kept.
+print("\nLOWER CEILING WINS")
+for c in ceilings:
+    for k in ("spans_room_ids", "partial_room_ids", "drop_below_wall_top_mm",
+              "keep_reason", "delete_reason"):
+        c.pop(k, None)
+plan2 = match(regions, ceilings, dict(CFG, FOLLOW_LOWER_AUTHORED_CEILING=True))
+st2 = dict((c["id"], c["status"]) for c in plan2["ceilings"])
+rs2 = dict((r["idx"], r) for r in plan2["regions"])
+ref = plan2["follow_z_by_level"].get(1)
+check("level reference = the lowest authored drop, 2700 mm",
+      ref is not None and abs(ref["z_ft"] / MM - 2700.0) < 0.01)
+check("authored drops are still kept", all(st2[i] == "keep" for i in (102, 103, 105, 108)))
+check("F (3000) and G (2970) top-layer ceilings are recut down, not kept",
+      st2[106] == "delete" and st2[107] == "delete" and
+      rs2[5]["status"] == "create" and rs2[6]["status"] == "create")
+check("D's top ceiling still goes for the original reason",
+      st2[104] == "delete" and "already has an authored ceiling" in
+      (dict((c["id"], c["reason"]) for c in plan2["ceilings"])[104] or ""))
+
+# region_ceiling_height() is where the height is actually chosen for a cut ceiling
+rch = core["region_ceiling_height"]
+for idx, wt in ((1, 3000.0), (2, 2800.0), (5, 3000.0)):
+    r = next(x for x in regions if x["idx"] == idx)
+    z, why = rch(None, r, None, [], plan2, [], dict(CFG, FOLLOW_LOWER_AUTHORED_CEILING=True))
+    check("room {} (walls {} mm) is cut at 2700 mm, source '{}'".format(
+        r["room_name"][:1], wt, why[:34]),
+        abs(z / MM - 2700.0) < 0.01 and why.startswith(core["FOLLOW_SOURCE"]))
+z, why = rch(None, next(x for x in regions if x["idx"] == 1), None, [], plan, [], CFG_WALLTOP)
+check("rule OFF: room B is cut at its own wall top again (3000 mm)", abs(z / MM - 3000.0) < 0.01)
+
+# --- height per room (default since 2026-09-25) + the created-by-script tag -------------------
+# A ceiling THIS script cut at 2700 mm (under the old lower-ceiling rule) looks exactly like a
+# person's drop. Tagged, it must be recut to its room's own wall top, not kept as "authored".
+print("\nHEIGHT PER ROOM + CREATED TAG")
+check("default config is height per room", core["CFG"]["FOLLOW_LOWER_AUTHORED_CEILING"] is False)
+X = rect(40, 0, 50, 10)
+rx = region(8, "X ours at 2700", X, 3000.0)
+ours = ceiling(201, X, 2700.0)
+ours["created_by_script"] = True
+theirs = ceiling(202, rect(40, 20, 50, 30), 2700.0)          # same height, a person's drop
+ry = region(9, "Y person's drop", rect(40, 20, 50, 30), 3000.0)
+plan3 = match([rx, ry], [ours, theirs], core["CFG"])
+st3 = dict((c["id"], (c["status"], c["reason"])) for c in plan3["ceilings"])
+rs3 = dict((r["idx"], r["status"]) for r in plan3["regions"])
+check("our 2700 mm ceiling is recut, not treated as authored",
+      st3[201][0] == "delete" and "created by this script" in (st3[201][1] or "") and rs3[8] == "create",
+      str(st3[201]))
+check("a person's identical 2700 mm drop is still kept as authored",
+      st3[202][0] == "keep" and rs3[9] == "authored")
+z, why = rch(None, rx, None, [], plan3, [], core["CFG"])
+check("room X is recut at its own wall top (3000 mm)", abs(z / MM - 3000.0) < 0.01, why)
+ours_ok = ceiling(203, X, 3000.0)
+ours_ok["created_by_script"] = True
+plan4 = match([rx], [ours_ok], core["CFG"])
+check("our ceiling already at the room's height is kept (no churn on reruns)",
+      plan4["ceilings"][0]["status"] == "keep" and plan4["regions"][0]["status"] == "kept")
 
 s = plan["summary"]
 print("\nSUMMARY  regions={} authored={} kept={} create={} bare={} sf  keep={} delete={}".format(

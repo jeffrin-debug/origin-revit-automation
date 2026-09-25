@@ -24,6 +24,7 @@ script between runs.
 | `pipeline/` | The command line (`origin.ps1`), the in-Revit runner, the batch pipeline, the ceiling-direction rule, diagnostics |
 | `ceiling-rebuild/` | The per-room ceiling rebuild — all the geometry logic, its own batch and live drivers, and the probes kept from working the problems out |
 | `docs/` | `ORIGIN_COMMANDS.md` — the runbook |
+| `claude/` + `CLAUDE.md` | Knowledge base for working on this with Claude Code — architecture, every layout rule and why, how to verify live, decision log, open issues. Start at [`CLAUDE.md`](CLAUDE.md) |
 
 ## Quick start
 
@@ -61,16 +62,32 @@ building and an interior door wins on width.
 
 Both are documented in full in `docs/ORIGIN_COMMANDS.md` and `ceiling-rebuild/README.md`.
 
+Stage 2 layers the pipeline's own layout rules over the generators — none of them edits a
+generator file; each rewrites one line of its source before it runs, or post-processes what it
+made, and each has a switch at the top of `pipeline/stage2_panels.py`:
+
+- wall boards follow the ceiling over **each stretch** of a face, not one height per face
+- outside corners **lap / butt** so the two boards meet
+- **no joint within 16 in of a wall** end (walls: moved to a stud; ceilings: whole furring bays)
+- narrow leftovers **merged into a neighbour** within one 4 × 8 sheet; ceiling seams rejoined,
+  **L-shapes allowed**
+- 8 ft door heads get **4 + 2 + 4 ft** rows
+- **soffits recognised by shape**, raised to touch the ceiling, underside boarded
+- stale corner-infill strips and stale ceiling assemblies cleaned up
+
+Every rule, its numbers and why it exists: [`claude/RULES.md`](claude/RULES.md).
+
 ## Tests
 
-Both rules can be exercised without Revit — the decision logic is pure Python and the Revit
-imports are stubbed:
+The decision logic is exercised without Revit — pure Python with the Revit imports stubbed, and
+the generator-patching tests run the patched copy of the real generator source:
 
 ```powershell
-python pipeline/test_origin_paths_offline.py          # 15 checks - path resolution
-python pipeline/test_ceiling_direction_offline.py     # 37 checks - panel direction rule
-python ceiling-rebuild/test_classifier_offline.py     # 24 checks - ceiling keep/cut rules
+Get-ChildItem pipeline\test_*_offline.py | ForEach-Object { python $_.FullName | Select-Object -Last 1 }
+python ceiling-rebuild/test_classifier_offline.py
 ```
+
+11 suites, 208 checks as of 2026-09-25. The generator-patching tests need `drywall_repo` (below).
 
 ## Running it on another machine
 

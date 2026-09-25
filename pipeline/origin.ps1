@@ -59,6 +59,7 @@ function Show-Help {
     Write-Host "   one at a time:  origin walls | ceilings | soffits | columns | beams"
     Write-Host "   origin status       is the bridge alive, and on which document"
     Write-Host "   origin doctor       check every path resolved (run this first on a new machine)"
+    Write-Host "   origin panels-only  isolate just the drywall boards in their own 3D view, for OBJ export"
     Write-Host ""
     Write-Host "  Nothing is saved. Save it yourself in Revit if you like the result." -ForegroundColor DarkGray
     Write-Host "  Needs dynamo\ORIGIN Pipeline Bridge.dyn open in Dynamo, run mode Periodic." -ForegroundColor DarkGray
@@ -117,6 +118,35 @@ print(json.dumps(ns['describe']()))
         exit 1
     }
     Write-Host "  everything resolves - you are good to go" -ForegroundColor Green
+    Write-Host ""
+    exit 0
+}
+
+if ($key -eq 'panels-only' -or $key -eq 'export-panels') {
+    # Isolates the drywall boards in their own 3D view for OBJ/USD export - no framing, and no
+    # stud-shaped corner-infill patches welded to the panel edges.
+    $hb = Get-Heartbeat
+    if ($null -eq $hb) {
+        Write-Host "bridge is not running." -ForegroundColor Red; exit 1
+    }
+    try { & $send -Script (Join-Path $root 'panels_only_view.py') -TimeoutSec $TimeoutSec | Out-Null }
+    catch { Write-Host ("transport failed: {0}" -f $_.Exception.Message) -ForegroundColor Red; exit 1 }
+    $r = $null
+    try { $r = Get-Content $resPath -Raw | ConvertFrom-Json } catch { }
+    if ($null -eq $r -or -not $r.ok) { Write-Host "failed"; Write-Host $r.error -ForegroundColor Red; exit 1 }
+    $o = $r.out
+    Write-Host ""
+    Write-Host ("  ORIGIN  panels-only   doc: {0}" -f $o.doc) -ForegroundColor Cyan
+    Write-Host "  ------------------------------------------------------------"
+    if ($o.status -ne 'ok') { Write-Host ("  {0}" -f $o.error) -ForegroundColor Red; exit 1 }
+    Write-Host ("   visible   {0,5}  drywall panels" -f $o.visible_panels) -ForegroundColor Green
+    Write-Host ("   hidden    {0,5}  framing" -f $o.counts.framing)
+    Write-Host ("             {0,5}  corner-infill patches (stud-shaped - the export artefact)" -f $o.counts.corner_infill)
+    Write-Host ("             {0,5}  screws" -f $o.counts.screws)
+    Write-Host ("             {0,5}  other" -f $o.counts.other)
+    Write-Host "  ------------------------------------------------------------"
+    Write-Host ("  view '{0}' is ready - export THAT view to OBJ" -f $o.view) -ForegroundColor Green
+    Write-Host "  (set INCLUDE_CORNER_INFILL = True in panels_only_view.py to keep the patches)" -ForegroundColor DarkGray
     Write-Host ""
     exit 0
 }
@@ -228,6 +258,16 @@ function Show-Step($name, $row) {
                 if ($g.Value.PSObject.Properties.Name -contains 'FATAL') { $mark = "FATAL" }
                 Write-Host ("               {0,-10} {1,-6} {2,6}s" -f $g.Name, $mark, $g.Value.sec)
             }
+        }
+    }
+    if ($null -ne $o.panels_only_view) {
+        $pv = $o.panels_only_view
+        if ($pv.clean) {
+            Write-Host ("             export view '{0}' refreshed - {1} panels, nothing else" -f $pv.view, $pv.visible) -ForegroundColor Green
+        } elseif ($pv.status -eq 'error') {
+            Write-Host ("             export view FAILED - see the detail report") -ForegroundColor Yellow
+        } else {
+            Write-Host ("             export view '{0}' not clean - leaked: {1}" -f $pv.view, ($pv.leaked -join ', ')) -ForegroundColor Yellow
         }
     }
     foreach ($f in @($row.verify_failures)) { if ($f) { Write-Host ("             ! {0}" -f $f) -ForegroundColor Yellow } }
