@@ -1,0 +1,158 @@
+{
+  "Uuid": "949ee02f-59a2-4921-b472-e28baa721a98",
+  "IsCustomNode": false,
+  "Description": "Live file-socket bridge: heartbeat + command execution (run PERIODIC)",
+  "Name": "ORIGIN Bridge",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "# origin_revit_bridge.py\r\n# ============================================================\r\n# ORIGIN <-> Revit LIVE BRIDGE (Dynamo Python node, runs in PERIODIC mode)\r\n#\r\n# Open dynamo\\ORIGIN Bridge.dyn in Dynamo, set the run mode (bottom-left) to PERIODIC\r\n# (interval ~1000 ms) and leave it running. Every tick this node:\r\n#   1. writes bridge\\heartbeat.json  - proof of life: time, open document, active view,\r\n#      current selection count, tick counter, last executed command id\r\n#   2. reads  bridge\\command.json    - {\"id\": <n>, \"script\": \"<abs path to .py>\",\r\n#      \"transaction\": false}; when id differs from the last executed id, the script FILE is\r\n#      read fresh from disk and exec'd inside Revit (so edited scripts run without any\r\n#      close/reopen), and its OUT lands in bridge\\result.json together with ok/error/timing.\r\n#\r\n# The command scripts are ordinary Dynamo-style scripts: they may import clr, take doc from\r\n# DocumentManager, and set OUT. Scripts that need a transaction manage it themselves the same\r\n# way the generators do (TransactionManager.EnsureInTransaction/TransactionTaskDone); for\r\n# small snippets \"transaction\": true makes the bridge wrap the exec instead.\r\n# ============================================================\r\n\r\nimport clr\r\nimport json\r\nimport os\r\nimport traceback\r\nimport time\r\n\r\nclr.AddReference('RevitAPI')\r\nclr.AddReference('RevitServices')\r\n\r\nfrom Autodesk.Revit.DB import *\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\nBRIDGE_DIR = r\"C:\\Users\\Origoncad\\Downloads\\origin_revit_drywall_scripts_v2_two_faces\\bridge\"\r\nCMD_PATH = os.path.join(BRIDGE_DIR, \"command.json\")\r\nRES_PATH = os.path.join(BRIDGE_DIR, \"result.json\")\r\nHB_PATH = os.path.join(BRIDGE_DIR, \"heartbeat.json\")\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\nuidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument\r\n\r\nif not os.path.exists(BRIDGE_DIR):\r\n    os.makedirs(BRIDGE_DIR)\r\n\r\n\r\ndef write_json(path, obj):\r\n    tmp = path + \".tmp\"\r\n    f = open(tmp, \"w\")\r\n    try:\r\n        json.dump(obj, f, indent=2, default=str)\r\n    finally:\r\n        f.close()\r\n    try:\r\n        if os.path.exists(path):\r\n            os.remove(path)\r\n        os.rename(tmp, path)\r\n    except Exception:\r\n        pass\r\n\r\n\r\ndef read_json(path):\r\n    try:\r\n        f = open(path)\r\n        try:\r\n            return json.load(f)\r\n        finally:\r\n            f.close()\r\n    except Exception:\r\n        return None\r\n\r\n\r\ndef run_command(cmd):\r\n    res = {\"id\": cmd.get(\"id\"), \"ok\": False, \"out\": None, \"error\": None,\r\n           \"script\": cmd.get(\"script\"), \"started\": time.strftime(\"%Y-%m-%d %H:%M:%S\")}\r\n    path = cmd.get(\"script\") or \"\"\r\n    if not os.path.exists(path):\r\n        res[\"error\"] = \"script not found: {}\".format(path)\r\n        return res\r\n    try:\r\n        src = open(path).read()\r\n        ns = {\"IN\": [None] * 10, \"OUT\": None, \"__name__\": \"__main__\", \"__file__\": path}\r\n        wrap = bool(cmd.get(\"transaction\"))\r\n        if wrap:\r\n            TransactionManager.Instance.EnsureInTransaction(doc)\r\n        try:\r\n            exec(compile(src, path, \"exec\"), ns)\r\n        finally:\r\n            if wrap:\r\n                TransactionManager.Instance.TransactionTaskDone()\r\n        res[\"ok\"] = True\r\n        res[\"out\"] = ns.get(\"OUT\")\r\n    except Exception:\r\n        res[\"error\"] = traceback.format_exc()\r\n    res[\"finished\"] = time.strftime(\"%Y-%m-%d %H:%M:%S\")\r\n    return res\r\n\r\n\r\nlast = read_json(RES_PATH)\r\nlast_id = last.get(\"id\") if isinstance(last, dict) else None\r\ncmd = read_json(CMD_PATH)\r\nstatus = \"idle\"\r\nif isinstance(cmd, dict) and cmd.get(\"id\") is not None and cmd.get(\"id\") != last_id:\r\n    status = \"ran command {}\".format(cmd.get(\"id\"))\r\n    write_json(RES_PATH, run_command(cmd))\r\n    last_id = cmd.get(\"id\")\r\n\r\nhb = read_json(HB_PATH) or {}\r\ntick = int(hb.get(\"tick\", 0)) + 1\r\nview_name = \"\"\r\nsel_count = 0\r\ntry:\r\n    view_name = doc.ActiveView.Name\r\nexcept Exception:\r\n    pass\r\ntry:\r\n    sel_count = len(list(uidoc.Selection.GetElementIds()))\r\nexcept Exception:\r\n    pass\r\nwrite_json(HB_PATH, {\r\n    \"time\": time.strftime(\"%Y-%m-%d %H:%M:%S\"),\r\n    \"doc\": doc.Title,\r\n    \"view\": view_name,\r\n    \"selection_count\": sel_count,\r\n    \"tick\": tick,\r\n    \"last_command_id\": last_id,\r\n    \"status\": status,\r\n})\r\n\r\nOUT = \"bridge alive - tick {} - {}\".format(tick, status)",
+      "Engine": "PythonNet3",
+      "VariableInputPorts": true,
+      "Id": "7ce63dae7d8b4b928949544f59ca28bd",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "f95cbef95cfb41eea96ceff90a494347",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "5daf88db2ccb486b82ab23ee39f7feab",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "29c53540d9a2405c89c91befd1a4a0da",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.ZeroTouch.DSFunction, DynamoCore",
+      "Id": "bd9cca58a0254f9ab0c1878630bbc742",
+      "NodeType": "FunctionNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "2f79e36a816a401a958e0cc2be439937",
+          "Name": "dateTime",
+          "Description": "DateTime representing the present time",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "FunctionSignature": "DSCore.DateTime.Now",
+      "Replication": "Auto",
+      "Description": "The current system date and time.\n\nDateTime.Now: var"
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "2f79e36a816a401a958e0cc2be439937",
+      "End": "f95cbef95cfb41eea96ceff90a494347",
+      "Id": "e4516cca450c456bad2a6bafac3034ab",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": true,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "3.6",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "9.1",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": false,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "4.0.2.3852",
+      "RunType": "Periodic",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "7ce63dae7d8b4b928949544f59ca28bd",
+        "Name": "ORIGIN Bridge (keep running)",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 300.0,
+        "Y": 0.0
+      },
+      {
+        "Id": "bd9cca58a0254f9ab0c1878630bbc742",
+        "Name": "DateTime.Now",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -45.085884428484064,
+        "Y": -1.2725300538883744
+      }
+    ],
+    "Annotations": [],
+    "X": 194.0180289514115,
+    "Y": 234.92467759144262,
+    "Zoom": 0.7537254235989256
+  }
+}

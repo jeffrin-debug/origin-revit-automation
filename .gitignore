@@ -2,6 +2,8 @@
 # files over 100 MB anyway. The two source folders hold ~500 MB of them.
 *.rvt
 *.rfa
+# ...except the outlet-box families the wall generator places - small, and needed to run
+!drywall-generators/**/*.rfa
 *.rte
 *.rvt.*
 *.0001.rvt

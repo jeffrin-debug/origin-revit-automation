@@ -190,6 +190,23 @@ def _purge_orphan_ceiling_assemblies(doc):
     return {"deleted": len(gone), "former_ceilings": sorted(hosts)}
 
 
+_MANIFEST_RE = re.compile(r'^MANIFEST_PATH = r"([^"\n]+)"', re.MULTILINE)
+
+
+def _localise_manifest_path(src, report, label):
+    """Each generator writes its manifest to a hard-coded absolute path (the folder it was
+    written in, on the machine it was written on). Point it at the generator folder THIS run
+    resolved (REPO), same file name - so on any machine the manifest lands where stage 2 and the
+    post-passes read it, instead of failing to open a path that does not exist there."""
+    m = _MANIFEST_RE.search(src)
+    if m is None:
+        return src
+    name = os.path.basename(m.group(1).replace("\\", "/"))
+    new = os.path.join(REPO, name)
+    report.setdefault("manifest_paths", {})[label] = new
+    return src[:m.start()] + 'MANIFEST_PATH = r"{}"'.format(new) + src[m.end():]
+
+
 def _load_door_head_courses():
     ns = {"__name__": "door_head_courses"}
     p = os.path.join(ROOT, "door_head_courses.py")
@@ -261,6 +278,7 @@ def run_on_document(doc, manifest_dir=None, only=None):
         dhc = None
         try:
             src = open(path).read()
+            src = _localise_manifest_path(src, report, label)
             if label == "ceilings":
                 try:
                     report["orphan_ceiling_assemblies"] = _purge_orphan_ceiling_assemblies(doc)

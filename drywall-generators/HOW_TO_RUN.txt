@@ -1,0 +1,97 @@
+====================================================================
+HOW TO RUN THE ORIGIN DRYWALL PIPELINE  (quick guide)
+====================================================================
+
+THE ONE FILE YOU OPEN
+--------------------------------------------------------------------
+C:\Users\Origoncad\Downloads\origin_revit_drywall_scripts_v2_two_faces\
+    dynamo\Automated Panels and Studs no screws - wall and ceilings.dyn
+
+Always open THIS copy (the repo folder). The copy in Documents is just
+a mirror.
+
+THE GOLDEN RULE
+--------------------------------------------------------------------
+Whenever Claude updates the scripts:
+  1. CLOSE the graph in Dynamo. If it asks "Save changes?" -> NO.
+  2. Reopen the .dyn fresh from the repo folder.
+An open Dynamo window keeps the OLD code in memory - re-running it
+runs old code, and saving it overwrites the new code on disk. This
+single rule has caused every "the fix didn't work" moment so far.
+
+RUNNING IT
+--------------------------------------------------------------------
+1. Open your Revit model, then open the graph in Dynamo (Manage tab
+   -> Dynamo).
+2. In the graph you will see:
+   - "Wall Types" dropdown nodes  -> pick the wall type(s) your model
+     uses (e.g. Interior - 4 7/8" Partition (1-hr)). Only walls of the
+     selected types are processed.
+   - "Ceiling Types" dropdown     -> same idea for ceilings/soffits.
+   - Python Script (large, walls) -> generates framing + drywall +
+     outlet per wall. Don't edit it.
+   - Python Script (ceilings)     -> per-room ceiling drywall+furring.
+     Skips soffits (they have their own node).
+   - "ORIGIN Soffits"             -> every soffit-named ceiling, exactly
+     2 boards each. Automatic - no selection needed.
+   - "ORIGIN Beams"               -> wraps every beam (bottom + sides).
+     Automatic.
+   - "ORIGIN Columns"             -> wraps every column (4-board box).
+     Automatic.
+   - Watch nodes                  -> the run summary + warnings. If
+     something looks wrong, READ THE WARNINGS first.
+3. Bottom-left of Dynamo: set to Manual, press RUN.
+4. Look at the result in Revit in the "ORIGIN Assembly" 3D view
+   (created automatically). IMPORTANT: in normal views the boards sit
+   flush with the base wall and Z-FIGHT (random gray patches) - that
+   is a display artifact, not missing drywall. Judge only in the
+   ORIGIN Assembly view.
+
+WHAT A RUN PRODUCES
+--------------------------------------------------------------------
+- Walls: studs/tracks/kings/jacks/headers (ST-...), drywall boards on
+  both faces (DP-<wall>-<n>A/B) stopping flush at every corner, doors
+  and windows wrapped, doorways clear at the floor.
+- One OUTLET per wall (EO-<wall>-001): a recessed socket hole on the
+  room-facing side, at a random stud, 12-18 in up. Pre-existing manual
+  cutouts in the walls are deleted automatically.
+- Ceilings: whole 4x8 sheets per enclosed area, split with a track-
+  width gap at every crossing wall; furring + mains above.
+- Soffits (ceiling type name contains "soffit"): exactly 2 boards.
+- Columns K###, beams B###: boxed with custom boards (<= 16 ft).
+
+EDITING OUTLETS (the movable cutouts)
+--------------------------------------------------------------------
+- The outlet is an ELECTRICAL FIXTURE - click it and only it selects
+  (never the drywall).
+- MOVE it or change its TYPE (six TM box sizes in the Type Selector),
+  then RE-RUN the graph: the hole in the drywall follows the box.
+- DELETE it: it stays deleted on re-runs (the wall remembers).
+- Want fresh random positions? Ask Claude to flip
+  OUTLET_FORCE_REGENERATE for one run.
+
+RE-RUNNING
+--------------------------------------------------------------------
+Safe any time: each generator deletes its own previous output first
+(outlets excepted - they are preserved). Select walls + ceilings and
+run everything together; the manifests then describe one consistent
+building, which is what Claude uses to verify runs numerically.
+
+OUTPUT FILES (next to the scripts; regenerated every run)
+--------------------------------------------------------------------
+- origin_assembly_manifest_*.json   walls: boards, framing, outlets,
+                                    opening rects, WARNINGS
+- origin_ceiling_manifest_*.json    ceilings: boards, rooms, furring
+- origin_soffit_manifest.json       soffits
+- origin_beam_manifest.json         beams
+- origin_column_manifest.json       columns
+After a run, just tell Claude "ran it" - the manifests carry
+everything needed to verify or diagnose without screenshots.
+
+IF SOMETHING LOOKS WRONG
+--------------------------------------------------------------------
+1. Check you're in the ORIGIN Assembly view (z-fighting elsewhere).
+2. Read the Watch node warnings (also saved into the manifest).
+3. Click the odd element, note its Mark (DP-.../ST-.../EO-...), and
+   give that ID to Claude - one ID beats ten screenshots.
+====================================================================

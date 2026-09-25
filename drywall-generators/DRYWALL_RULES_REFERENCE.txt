@@ -1,0 +1,968 @@
+================================================================================
+ORIGIN DRYWALL/FRAMING PIPELINE - COMPLETE RULES & CONDITIONS REFERENCE
+================================================================================
+Purpose of this document: a single, plain-English reference to EVERY rule,
+constant, and condition currently baked into the 5 generator scripts, written
+specifically to support the next phase of work - finetuning the pipeline so it
+runs cleanly on ~100 different Revit building models without manual per-model
+patching. Sections marked with a "!!" flag are things that were built or tuned
+against ONE specific building and are the most likely places a new building
+will break something, silently misclassify something, or need a code change.
+
+Last synthesized: 2026-07-30, from a full read of all 5 generator scripts:
+  - origin_wall_assembly_v4_phase2_notaper_noscrew_nojoint.py   (walls)
+  - origin_ceiling_assembly_v1_notaper_noscrew_nojoint.py       (ceilings)
+  - origin_soffit_assembly_v1.py                                (soffits)
+  - origin_beam_assembly_v1.py                                  (beams)
+  - origin_column_assembly_v1.py                                (columns)
+
+This document describes CURRENT behavior of the files as they exist right now
+(including recent reverts). Where something was tried, fixed, then reverted at
+the user's request, that history is noted - because it's exactly the kind of
+thing worth re-considering when tuning for new buildings.
+
+
+================================================================================
+PART 1 - HOW THE WHOLE PIPELINE FITS TOGETHER
+================================================================================
+
+1.1  Five independent "plugin" scripts, one shared convention
+----------------------------------------------------------------
+Each script is a standalone Dynamo Python node that self-collects or reads a
+Dynamo input, transacts, and writes its own DirectShape geometry:
+
+  WALLS     -> drywall + metal framing (studs/tracks/headers/sills/jacks/kings)
+  CEILINGS  -> drywall + furring/mains/hangers, per-room
+  SOFFITS   -> same generator as ceilings, restricted to soffit-named ceilings,
+               using a different 2-board layout instead of a 4x8 grid
+  COLUMNS   -> drywall wrap boxes only (no framing) around structural/arch columns
+  BEAMS     -> drywall wrap boxes only (no framing) around structural framing
+
+They are NOT one shared codebase - each is a self-contained copy-paste script
+(a Dynamo Python node can only hold one file), so a fix made in one must be
+manually mirrored into its siblings. Two pairs are near-identical forks of each
+other today:
+  - origin_ceiling_assembly_v1_notaper_noscrew_nojoint.py and
+    origin_soffit_assembly_v1.py are BYTE-IDENTICAL except for two lines:
+    PROCESS_MODE ("ceilings" vs "soffits") and MANIFEST_PATH.
+  - origin_beam_assembly_v1.py and origin_column_assembly_v1.py share every
+    constant, the entire clip/cleanup/material/manifest machinery, and differ
+    only in which Revit category they collect and the shape of the wrap box.
+
+!! Because these are copy-paste siblings, not shared modules, ANY fix intended
+   to be general (e.g. a hardcoded string, a clearance constant, a naming
+   convention) must be applied in every sibling file by hand. There is no
+   single source of truth to edit once.
+
+1.2  Nomenclature (naming convention used everywhere)
+----------------------------------------------------------------
+Every generated element gets a name written to BOTH its Revit "Mark" parameter
+and its DirectShape ".Name" property (so it's schedulable/taggable), plus a
+longer pipe-delimited tag written to "Comments" (used as the cleanup/ownership
+key, NOT meant to be a display name):
+
+  Host numbering (assigned once, persisted to the wall/ceiling Mark so it's
+  stable across re-runs):
+    Wall              -> NNN            e.g. 001, 002, 008 (3-digit, model-wide)
+    Ceiling           -> C###           e.g. C001
+    Soffit            -> S###           e.g. S001 (a Ceiling classified as a soffit)
+    Column            -> K###           e.g. K001
+    Beam              -> B###           e.g. B001
+
+  Generated element naming:
+    Drywall panel     -> DP-<host>-<seq><face-letter-if-wall>
+                          e.g. DP-008-002B (wall board), DP-S001-004 (soffit board,
+                          no face letter - ceilings/soffits are single-face)
+    Framing member    -> ST-<host>-<seq>   e.g. ST-009-001
+                          (one flat per-host counter for EVERY framing kind -
+                          the real kind (STUD/TRACK/HEADER/SILL/KINGSTUD/CRIPPLE
+                          on walls; FURRING/MAIN/HANGER on ceilings) is NOT in
+                          the name - it only survives in the Comments string
+                          and the manifest's "member_type" field)
+    Screw             -> SC-<host>-<seq>   (dormant - see 1.4, screws are off)
+    Door / Window     -> DR-<wall><letter> / WN-<wall><letter>
+    Outlet            -> EO-<wall>-001
+
+  The real Revit ElementId is kept SEPARATELY in Comments as "WALL=W<eid>" /
+  "CEILING=C<eid>" / "HOST=<eid>" - this, not the Mark number, is what cleanup
+  logic actually keys off, so renumbering a wall's Mark never breaks cleanup.
+
+1.3  Shared per-run lifecycle (same shape in all 5 scripts)
+----------------------------------------------------------------
+  1. delete_previous() - find and delete every DirectShape this SAME script
+     already created on a previous run (by Comments-prefix match on this
+     script's own APP_ID, plus any listed LEGACY_APP_IDS for one-time
+     migration cleanup of retired combined nodes). Makes every script
+     idempotent/safely re-runnable.
+  2. setup_board_style() - get-or-create the shared colored subcategories +
+     materials (see 1.5).
+  3. collect_other_pipeline_solids() / collect_wall_plans() / etc. - snapshot
+     OTHER generators' already-existing output as real solid geometry, once,
+     at the start of this run (see 1.6 - this is the single most important
+     cross-cutting mechanism to understand).
+  4. Collect this run's target elements (walls/ceilings/columns/beams) from a
+     Dynamo input or self-collection.
+  5. Per-element loop: compute geometry, clip against step 3's snapshot,
+     create DirectShapes, append manifest records. Wrapped in try/except per
+     element so one bad element can't crash the whole run (see 1.7).
+  6. Write a JSON manifest with every generated element's properties.
+
+1.4  Screws are OFF everywhere, in every currently-live build
+----------------------------------------------------------------
+`GENERATE_SCREWS = False` is hardcoded in every "notaper_noscrew_nojoint"
+build (walls, ceilings, and by inheritance soffits). No SC-* screw geometry is
+ever created by the live pipeline today. Real screw-placement CODE still
+exists (spacing/setback/edge-avoidance rules - see Part 3 and Part 4) and can
+be turned on via a Dynamo input override, but as things stand any downstream
+consumer (e.g. an Isaac Sim texture pipeline that wants to place screws) has
+NO exported screw mesh to key off - it must derive screw positions procedurally
+from stud/furring geometry itself.
+
+1.5  Shared material / subcategory pattern
+----------------------------------------------------------------
+`get_or_create_material` / `get_or_create_subcategory` (implemented near-
+identically in every script): linear-scan existing Materials/Subcategories by
+NAME first, reuse if found, else create new. This is how walls, ceilings,
+soffits, columns, and beams all converge on the SAME "ORIGIN Drywall Base"
+material/subcategory - purely by all scripts independently hardcoding the
+identical name string. There is no shared config; if one script's copy of the
+name string ever drifts (a typo, a rename in only one file), that script will
+silently create a SEPARATE material instead of reusing the existing one.
+Styling failures degrade gracefully everywhere: if material/subcategory setup
+throws, the affected boards are just created uncolored (default Revit
+appearance) rather than the run failing.
+
+1.6  THE CORE CROSS-GENERATOR CLIPPING MECHANISM (read this carefully)
+----------------------------------------------------------------
+Every script needs a way to avoid double material where two independently-
+generated assemblies meet (e.g. a column's wrap board and the wall drywall
+right next to it). None of the scripts talk to each other directly - instead:
+
+  - `collect_other_pipeline_solids()` (beams/columns) or the equivalent wall-
+    plan/soffit-assembly collectors (walls/ceilings) scan every DirectShape
+    already in the model, filter to ones tagged with SOME OTHER script's
+    APP_ID (skipping this script's own tag), and fetch their REAL solid
+    geometry (not just bounding boxes - a bbox-only clip was explicitly tried
+    and rejected as "too crude": a thin butt-face board can sit entirely
+    inside a wall's bbox while never actually touching the wall's real board
+    there, so a bbox clip would wrongly erase a perfectly fine board).
+  - This snapshot is taken ONCE, at the very start of the run.
+  - Each new board is boolean-DIFFERENCE'd against every overlapping snapshot
+    solid (broad-phase bbox check first, to skip the expensive boolean op
+    when nothing nearby exists).
+  - "TRUSTED EMPTY RESULT" pattern: if a boolean clip reduces a board's solid
+    to ~zero volume, that is TRUSTED as "this board is genuinely, fully
+    covered by something already placed" and the board is dropped entirely -
+    logged as a warning like "K001-004: fully covered by existing drywall/
+    framing - board omitted", never treated as an error or reverted.
+
+!! THE SNAPSHOT-STALENESS TRAP (has caused real, repeated bugs this session):
+   Because the snapshot is taken once at script start, IT GOES STALE the
+   moment some OTHER generator is re-run afterward without also re-running
+   this one. This has already caused two real, measured overlaps in this
+   project (both at the same column corner, on two different days), each
+   fixed simply by re-running the column generator - no code was ever wrong,
+   the snapshot was just outdated. THE PRACTICAL RULE THIS IMPLIES FOR EVERY
+   FUTURE BUILDING: run generators in this order every time -
+        1. Walls
+        2. Ceilings / Soffits
+        3. Columns / Beams  (these read walls+ceilings' output to clip against)
+   ...and re-run Columns/Beams again any time Walls or Ceilings/Soffits are
+   re-run afterward for ANY reason, even a seemingly unrelated fix. Nothing in
+   the code enforces or checks this - it is a purely procedural requirement.
+   `origin_bridge_run_all.py` (a helper script, not one of the 5 generators)
+   already sequences this correctly and is the safest way to run a full batch.
+
+1.7  Failure isolation - the pipeline never "hard crashes" on bad input
+----------------------------------------------------------------
+Every script wraps its ENTIRE per-element body in try/except: one bad
+wall/ceiling/column throws its exception into that element's own skip/warning
+list, and the loop moves on to the next element. A single top-level
+try/except around the whole transaction body additionally guarantees the
+transaction is still committed (not rolled back) and a manifest is still
+written even after a genuinely unexpected/fatal-looking exception - logged as
+a "FATAL: ..." warning entry, not a crash. This means: on a new building, the
+pipeline is very unlikely to simply stop running - it is much more likely to
+SILENTLY under-process (skip an element, omit a board) with only a warning
+string as evidence. Always check the `warnings` list and the skip counts in
+the run's OUT summary before trusting a run was complete.
+
+
+================================================================================
+PART 2 - WALL SCRIPT: FRAMING & DRYWALL RULES
+================================================================================
+File: origin_wall_assembly_v4_phase2_notaper_noscrew_nojoint.py
+
+2.1  Key constants (name -> value -> what it controls)
+----------------------------------------------------------------
+  STUD_SPACING_FT           16 in          Field-stud on-center spacing
+  FLANGE_FT                 1.25 in        C-stud/track flange width
+  LIP_FT                    0.1875 in      C-stud return lip
+  MAT_T_FT                  0.0451 in      Steel gauge (~18 ga) thickness
+  TRACK_FLANGE_FT           1.25 in        U-track flange height
+  MIN_SEG_FT                3 in           Framing pieces shorter than this: dropped
+  DERIVE_STUD_DEPTH_FROM_WALL  True        Stud depth = wall width - drywall on both
+                                           sides (so framing+drywall exactly fill
+                                           the modeled wall). If False, uses a
+                                           fixed 3.625 in nominal depth instead.
+  MIN_STUD_DEPTH_FT         1.25 in        Floor clamp on the derived depth
+  PANEL_LENGTH_FT           8.0 ft         Sheet length (set to 12.0 for 4x12 stock)
+  PANEL_HEIGHT_FT           4.0 ft         Course height
+  CODE_GAP_FT               0.0            THIS BUILD: flush butt joints, no reveal
+                                           (a sibling "trunk" build uses ~1/8")
+  DRYWALL_THICKNESS_STD_FT  0.5 in         Standard 1-layer drywall thickness
+  DRYWALL_THICKNESS_RATED_FT 0.625 in      Type X thickness, rated walls
+  DRYWALL_LAYERS_RATED / STD  2 / 1        Rated walls get 2 layers/side, else 1
+  TAPERED_LONG_EDGES        False          THIS BUILD: no factory taper (flat boards)
+  HOLE_MARGIN_FT            0.05 ft        Boolean-cutter over-travel margin
+  CORNER_JOIN_TOL_FT        0.5 ft         Corner-detection geometric tolerance
+  CORNER_OVERSHOOT_MAX_FT   2.0 ft         Max overshoot past a corner still trimmed
+  CORNER_END_TOL_FT         0.5 ft         Tolerance for "does a wall end land here"
+  HANDLE_CORNERS            True           Master switch, corner pull-back logic
+  TRIM_DRYWALL_AT_CORNERS   True           Extends pull-back logic to drywall too
+  DRYWALL_CORNER_WRAP_BY_FACE  both False  See 2.4 - forces flush-butt everywhere
+  SPLIT_DRYWALL_AT_PARTITIONS True         See 2.5 - forces a joint at T-junctions
+  SOFFIT_BAND_WALL_TYPE_NAME  "Generic - 2'"   !! exact string match, see 2.9
+  GENERATE_SCREWS           False          Dormant, see 1.4
+  GENERATE_OUTLETS          True           One outlet box per wall, see 2.8
+  OUTLET_RECESS_FRAC        0.30           Recess depth as fraction of wall width
+  DOOR_FLOOR_SNAP_FT        0.5 ft         Opening within this of floor -> a door
+  OPENING_CLEARANCE_FT      0.05 ft        Rough-opening clearance for FRAMING
+  DRYWALL_OPENING_REVEAL_FT 0.125 in       Drywall's own (smaller) reveal at openings
+
+2.2  Wall geometry reading rules
+----------------------------------------------------------------
+  - Only STRAIGHT walls are processed. Any wall whose Location Curve is not a
+    plain Line (arcs, splines) is silently skipped ("not a straight wall") -
+    not an error, just absent from output.
+  - Wall height: use the wall's own height parameter if readable & >0.1 ft,
+    else its element bounding box height, else a hardcoded fallback of 9.0 ft.
+  - Wall width: use WallType.Width if readable & >0, else wall.Width, else a
+    hardcoded fallback of 0.5 ft.
+  - !! Both fallbacks are SILENT - if a wall in some new model genuinely lacks
+    readable height/width, the script substitutes a plausible-looking but
+    possibly-wrong value with no visible failure.
+  - Location Line reference is read and honored (Wall Centerline, Core
+    Centerline, Finish Face Exterior/Interior, Core Exterior/Interior) so
+    framing/drywall offsets correctly regardless of which reference line a
+    wall was drawn to.
+  - A nonzero Base Offset (e.g. an elevated "band" wall) shifts the entire
+    generated assembly's vertical origin to match - fixes an earlier bug where
+    an elevated band wall's whole assembly generated at the floor instead of
+    at its true elevation.
+
+2.3  Fire-rating detection (shared logic pattern, wall-specific keyword list)
+----------------------------------------------------------------
+  IF the wall TYPE has a "Fire Rating" parameter with a truthy value (a string
+    containing a digit, or a nonzero number) -> rated.
+  ELIF the wall type NAME (lowercased) contains any of:
+    "fire", "rated", "type x", "type-x", "1 hr", "2 hr", "1-hr", "2-hr",
+    "1hr", "2hr"
+    -> rated.
+  ELSE -> not rated (the default; any read failure also falls here).
+  Precedence: a Dynamo input override > the module-level FORCE_FIRE_RATED
+  setting > this auto-detection.
+  !! English-only keyword list - a model using a different language or a
+     custom/differently-named parameter will be silently treated as NOT rated
+     even if it genuinely is.
+
+2.4  Corner / wall-junction pull-back and wrap rules
+----------------------------------------------------------------
+Two independent passes are combined (the larger pull-back wins):
+
+  A) Revit's own reported wall joins (a safety net) - classify each join as:
+     - Collinear continuation (same direction) -> ignore, not a corner.
+     - True L-corner (both walls end at the same point) -> lower ElementId
+       wall butts, higher ElementId wall runs through (deterministic tiebreak
+       so both walls independently compute the same answer without talking
+       to each other).
+     - T-join stem (this wall's end lands in the middle of another wall) ->
+       always butt.
+
+  B) A from-scratch GEOMETRIC pass over every straight wall in the model
+     (catches walls that visually touch but aren't Revit-"joined"): computes
+     the 2D line intersection of each wall-end with every other wall's
+     infinite line, classifies the crossing the same 3 ways as above using
+     CORNER_JOIN_TOL_FT / CORNER_OVERSHOOT_MAX_FT / CORNER_END_TOL_FT as
+     tolerances, and additionally distinguishes: "this wall runs through a
+     mid-span T, the OTHER wall butts into it" -> no pull-back needed here at
+     all (that case is instead handled by the partition-split rule, 2.5).
+
+  DRYWALL_CORNER_WRAP_BY_FACE = {"interior": False, "exterior": False} (the
+  live default, both faces) means: at BOTH inside and outside corners, both
+  faces ALWAYS BUTT at the neighboring wall's near face - zero cross-wall
+  drywall overlap anywhere, chosen specifically for Isaac Sim / robot-
+  interaction cleanliness over "how a real drywaller would actually wrap a
+  corner." Setting either face to True re-enables historical wrap/cover
+  behavior (visually nicer at outside corners) but WILL reintroduce genuine
+  3D solid overlap between two walls' boards - this was tried, found to let a
+  board penetrate a neighboring room, and reverted to all-False.
+
+  !! Note: "exterior"/"interior" here just means Wall.Orientation's two sides,
+     NOT literal building-exterior - an interior partition's "exterior" side
+     is a perfectly normal room face. Don't assume "exterior=False" only
+     matters at the building envelope.
+
+  Degenerate guard: if a wall's two end pull-backs would together exceed the
+  wall's own length, BOTH pull-backs are abandoned and the run resets to the
+  wall's full, untrimmed length rather than emitting a negative/near-zero run.
+
+2.5  Partition-split-at-T-junction rule (forces a joint where a wall butts in)
+----------------------------------------------------------------
+  Rule: wherever another wall's END lands in the MIDDLE of a through-wall (a
+  classic T-junction, the through-wall being the "main" wall and the other
+  being the "partition"), the through-wall's drywall gets a forced board joint
+  there - so no single panel ever spans across into two different rooms. This
+  is explicitly NOT construction-accurate (a real continuous sheet would run
+  past a partition uncut) - a deliberate trade for per-room object separation
+  in the simulation.
+  - Only affects the FACE that's physically on the partition's side; the
+    opposite face lays out continuously and is unaffected.
+
+  SOFFIT-BAND-WALL EXEMPTION (with a Z-range refinement):
+  If the "other" wall at a T-junction is itself a soffit's own band wall (see
+  2.9), the forced split does NOT apply to every course floor-to-ceiling -
+  only to the course(s) that actually overlap that band wall's own real
+  height range. Rationale: a shallow ~2ft bulkhead touching a through-wall's
+  mid-span isn't a real room-dividing partition at floor level, so forcing a
+  full-height split there over-fragmented boards for no reason - but the
+  course that IS actually at the soffit's own height still needs the split,
+  or a single board visibly spans across the transition where the soffit
+  begins/ends along that wall.
+
+2.6  Opening (door/window) detection and drywall-cut rules
+----------------------------------------------------------------
+  - Every hosted insert is checked: real Doors/Windows/embedded curtain walls
+    become openings; anything else (a manual/leftover cutout family) is
+    DELETED outright if REMOVE_MANUAL_CUTOUTS is True (the outlet system now
+    covers the "small hole in the wall" use case those cutouts used to serve).
+  - DOOR_FLOOR_SNAP_FT: an opening whose bottom is within 0.5 ft of the floor
+    is snapped to floor level exactly (treated as a floor-reaching door) so
+    the bottom track/board splits cleanly there.
+  - is_window = an opening's (post-snap) bottom is NOT at the floor. Windows
+    get a sill; doors don't. Both get a header; jack studs run floor-to-header
+    for doors, sill-to-header for windows.
+  - Drywall cut geometry, per sheet overlapping openings:
+      0 openings overlap this sheet -> unchanged.
+      1 opening, spans the sheet's FULL width and height -> whole sheet is
+        consumed, no board at all.
+      1 opening, spans full width only, or full height only -> split into up
+        to 2 separate rectangular boards (the only case that legitimately
+        produces two real separate boards from one cut).
+      1 opening, a partial notch/corner bite -> built as ONE single connected
+        polygon (an L-shape or a notch), NEVER two rectangles meeting at the
+        opening's corner - directly implements the rule "wrap sheets around
+        openings, joints toward mid-opening, never a butt joint at a corner."
+      1 opening, fully interior (touches none of the sheet's 4 edges) -> a
+        real 3D boolean "hole" cut (hang-over-then-cut-out).
+      2+ openings overlapping the SAME sheet -> falls back to a chained
+        boolean-difference ("multicut") - still one connected solid, but a
+        less precisely-reasoned approximation than the single-opening cases.
+        Counted separately in the run summary as "multi_opening_boolean_sheets"
+        - a nonzero count here on a new building is worth a manual look.
+  - Drywall's own reveal at an opening is intentionally smaller than the
+    framing's rough-opening clearance (so there isn't an oversized visible
+    gap around the frame) - EXCEPT at a door's floor edge, which gets NO
+    inset at all (a door has no reveal at the floor in real construction;
+    the inset there was found to leave a literal drywall strip sitting across
+    the doorway at floor level - a real modeled obstacle).
+
+2.7  Framing member placement rules
+----------------------------------------------------------------
+  - King studs: any stud line that coincides with an opening jamb.
+  - Cripple studs: any stud line strictly INSIDE an opening's span (its
+    vertical run is broken above/below the opening, never crosses it).
+  - Plain field studs: everything else, full wall height.
+  - Header: one per opening, spans the opening at its top.
+  - Sill: WINDOWS ONLY, placed just below the opening bottom.
+  - Jack studs: two per opening, one set back from each jamb by one flange
+    width; the left one's C-profile is flipped so its web faces the opening
+    (closed steel back for trim to fasten to, not the open flange mouth); if
+    a stud happens to be a jamb for two openings on opposite sides at once
+    (tightly-spaced openings sharing a stud), it stays UN-flipped for one of
+    them - an accepted, unresolved tie, not a bug fix candidate.
+  - Bottom track: only split at DOOR openings; continuous everywhere else.
+  - Top track: only split where an opening reaches the ceiling; a normal
+    window/door leaves the top track continuous.
+
+2.8  Outlet placement rules
+----------------------------------------------------------------
+  - Exactly ONE outlet per wall, tracked via a Comments-string marker so
+    reruns never duplicate or move a placed outlet unless force-regenerate is
+    explicitly set.
+  - Elevated walls are exempt: if a wall's Base Offset is more than 0.5 ft
+    (an elevated band/soffit/beam-look wall), NO outlet is ever placed there
+    at all - checked before any other outlet logic runs.
+  - Candidate stud selection: only interior field studs (never jambs or studs
+    inside an opening); the box's full 12-18in mounting-height band must be
+    clear of every opening.
+  - Style = "recess" (the live default): the chosen face's board gets a
+    socket-sized hole cut into it, and the box sits INSIDE the wall cavity
+    at ~30% of the wall's own thickness deep - re-derived fresh from the
+    existing Revit family instance on every run, so moving/resizing the box
+    in Revit moves/resizes the hole on the next run automatically.
+  - Face selection ("inner" mode, the live default): whichever face's outward
+    normal points toward the centroid of the currently-selected walls - i.e.
+    outlets always face into the selected environment, never the outside of
+    the building. Needs at least 2 selected walls to have an unambiguous
+    centroid; with fewer, a warning is logged and the pick may go either way.
+  - Randomness: which specific stud (and, without "inner" face mode, which
+    face) an outlet lands on IS RANDOM per run for any not-yet-marked wall -
+    only already-placed/marked outlets are stable across reruns.
+
+2.9  Soffit-band-wall special-casing (two separate mechanisms)
+----------------------------------------------------------------
+  `_is_soffit_band_wall(wall)` = `wall.Name == "Generic - 2'"` - an EXACT,
+  brittle Wall TYPE NAME string match, no fuzzy fallback. !! This is almost
+  certainly the single most building-specific string in the whole pipeline.
+
+  Mechanism A - visual flattening of the band wall's OWN framing: a soffit
+  band wall's studs/tracks/headers are rendered as a flat rectangular slab
+  (sized to the true C/U-channel's own bounding box, so it can never extend
+  past where the real channel already was) using the drywall's own material,
+  instead of the true C/U-channel shape and steel color - purely cosmetic, so
+  the band wall's framing visually reads as a normal flat drywall panel
+  instead of an obviously different steel member sitting among ceiling
+  boards. The real member kind (STUD/TRACK/etc.) is still correctly recorded
+  in Comments/manifest - only the RENDERED geometry and color change. As of
+  the most recent related fix, the rendered depth is ALSO capped to standard
+  drywall thickness (previously it could render extremely deep - nearly 2 ft
+  deep on one unusually thick band wall - producing a visible "bump" against
+  a normal-thickness neighboring panel).
+
+  Mechanism B - clipping OTHER walls against the soffit's real assembly: any
+  non-band wall whose drywall/framing physically overlaps the soffit's real
+  geometry (the Ceiling element itself, plus the band walls' own already-
+  generated boards/framing, found by Mark-prefix - NOT the raw Wall element's
+  geometry, which was measured to be too thin/inaccurate for this purpose) is
+  clipped flush, zero-clearance, against it. A prior version used a small
+  clearance gap here; that gap looked fine in Revit's own viewport but left
+  an actual visible seam/void once exported and rendered downstream - the
+  flush zero-clearance cut is the one that's correct for the exported sim.
+  Band walls are explicitly EXEMPTED from being clipped against themselves.
+  Band walls are also forced to be processed FIRST in the main per-wall loop,
+  specifically so their own generated geometry exists and is queryable by the
+  time any other wall in the same run needs to clip against it.
+
+2.10  Two named, explicitly one-off geometric patches (NOT general rules)
+----------------------------------------------------------------
+  A small lookup, `{"008": 9, "010": 2}`, says: "if the CURRENT wall's number
+  is 008, its named neighbor is wall 9; if it's 010, its neighbor is wall 2."
+  For those two specific walls only: if the named neighbor wall is found to
+  meet this wall collinearly (a straight run split across two Wall elements,
+  common at a column corner), this wall's drywall is pulled back an extra
+  half-flange-width at that end - because the two walls are collinear (not
+  crossing at an angle), so the normal corner-wrap/butt logic never touches
+  them, yet the neighbor's own end stud physically reaches slightly past the
+  shared point into this wall's run.
+  !! This was explicitly confirmed with the user as a scoped, one-off fix for
+     THIS building's specific column corner - not a general rule. It will be
+     a silent no-op (not an error) on every other building. If an analogous
+     "two collinear walls meeting exactly at a column, with a visible tiny
+     reach-through" situation shows up on a different building, this pattern
+     (a wall-number -> wall-number lookup, pull back by FLANGE_FT/2 at the
+     matched end) is the template to copy, re-keyed to that building's own
+     wall numbers - it is NOT something that will "just work" unmodified.
+
+
+================================================================================
+PART 3 - CEILING & SOFFIT SCRIPTS
+================================================================================
+Files: origin_ceiling_assembly_v1_notaper_noscrew_nojoint.py (mode="ceilings")
+       origin_soffit_assembly_v1.py                           (mode="soffits")
+These two files are the SAME program (see 1.1) - every rule below applies to
+both except where the routing/mode difference is called out.
+
+3.1  Key constants
+----------------------------------------------------------------
+  FURRING_SPACING_FT        16 in          Furring/hat-channel OC spacing
+  FURRING_HEIGHT_FT         0.875 in       7/8" DWC furring depth
+  MIN_SEG_FT                3 in           Sliver-skip threshold, framing & boards
+  CLIP_CEILING_AT_WALLS     True           Every wall's plan footprint is
+                                          subtracted from the ceiling clip mask
+  CEILING_PER_ROOM          True           Route ceilings with an overlapping
+                                          Room through per-room generation
+                                          instead of the legacy whole-grid path
+  MIN_ROOM_AREA_SF          1.0 sf         Rooms smaller/unenclosed: skipped
+  SOFFIT_SEPARATE_FLOW      True           Enables the dedicated 2-board soffit path
+  SOFFIT_MIN/MAX_BOARD_FT   2.0 / 16.0 ft  Each soffit board must fall in this range
+  SOFFIT_BEAM_MAX_WIDTH_FT  5.0 ft         A "soffit" wider than this on its SHORT
+                                          side is treated as a room-sized ceiling
+                                          drop instead, and gets ordinary tiling
+  GENERATE_MAINS            True           Add carrying channels on long spans
+  MAX_FURRING_SPAN_FT       48 in          Beyond this, mains are required (ASTM C754)
+  MAIN_SPACING_FT           48 in          Carrying-channel OC spacing
+  GENERATE_HANGERS          False          Off - hangers only make sense with a
+                                          structural deck/slab above; with no
+                                          deck, mains fasten directly to
+                                          joists/trusses instead
+  SPLICE_CHANNELS           True           Long channel runs are broken into
+                                          realistic stock lengths (furring
+                                          12ft, mains 16ft) with staggered,
+                                          nested-looking laps at each joint
+  CODE_GAP_FT (via layer)   0.0            Same NO-JOINT convention as walls
+  TAPERED_LONG_EDGES        False          Same NO-TAPER convention as walls
+  MAXIMIZE_WHOLE_PANELS     True           Kills the odd-row stagger so every
+                                          row starts at its own region's
+                                          origin - maximizes whole 4x8 sheets
+                                          per user request, at the cost of
+                                          real-world staggering realism
+  CUT_AT_COLUMNS / BEAMS    True / True    Punch a cutout where a column/beam
+                                          passes through this ceiling's band
+  COLUMN_BEAM_CLEARANCE_FT  0.5 in         !! Recently tightened (was 0.6in) to
+                                          exactly match the column/beam scripts'
+                                          own board thickness, so the cutout
+                                          edge lands flush on the real column/
+                                          beam board face with zero gap - see
+                                          3.5. If the column/beam scripts'
+                                          drywall thickness constant is EVER
+                                          changed, this value must be changed
+                                          to match, in BOTH this file and its
+                                          sibling.
+  HOLE_MARGIN_FT            0.05 ft        Boolean-cutter over-travel margin
+  MAX_SCREWS_PER_CEILING    8000           Hard cap; !! silently truncates with
+                                          NO warning if hit
+  HANGER_MAX_AREA_SF        16.0 sf        !! Declared but NEVER used anywhere in
+                                          either file - purely informational,
+                                          not an enforced constraint
+
+3.2  How a Ceiling element is classified as "soffit" vs ordinary ceiling
+----------------------------------------------------------------
+  `ceiling_prefix(ceiling)`: returns "S" if the ceiling's TYPE NAME or its
+  TYPE'S FAMILY NAME (case-insensitive) contains the substring "soffit" -
+  otherwise "C". This one substring test is the ENTIRE classification
+  mechanism deciding soffit vs. ordinary ceiling routing.
+  !! Same fragility class as the wall-side band-wall name match (2.9): any
+     building whose modeler used a different word ("Bulkhead", "Drop",
+     "Beam Wrap", a non-English term, an opaque type code) will have that
+     soffit silently processed as an ORDINARY ceiling instead - full 4x8
+     grid, potentially mains/hangers added - with no warning that
+     misclassification occurred. This is the top thing to check/generalize
+     before running on a new building whose soffits use different naming.
+  In "ceilings" mode, anything classified "S" is explicitly dropped (with a
+  warning that the Soffits node handles it); in "soffits" mode, ONLY
+  elements classified "S" are self-collected, ignoring the Dynamo selection
+  entirely (same self-collecting pattern as columns/beams).
+
+3.3  Boundary extraction - flat ceilings only
+----------------------------------------------------------------
+  The ceiling's real bottom-face boundary is read directly from its solid
+  geometry: the LOWEST planar face whose normal points close to straight down
+  (within about 26 degrees of true -Z) is used as "the" bottom face; every
+  curve loop on that face is tessellated, the largest-area loop becomes the
+  outer boundary, every other loop becomes a hole (a courtyard/opening drawn
+  directly into the ceiling's own sketch).
+  !! If NO face satisfies the near-vertical-normal test (a sloped/vaulted
+     ceiling), the ceiling is silently skipped with "could not read boundary"
+     - sloped/vaulted ceilings are simply not supported by this generator at
+     all, not approximated, not warned about beyond that one line.
+
+3.4  Routing decision - which layout algorithm a ceiling gets
+----------------------------------------------------------------
+  For each ceiling, in priority order:
+    1. If it's a soffit (per 3.2) AND its short bbox dimension is <=
+       SOFFIT_BEAM_MAX_WIDTH_FT (5 ft) -> the dedicated 2-BOARD SOFFIT FLOW
+       (3.7). A soffit-named element WIDER than 5 ft on its short side is
+       "demoted" (with a warning) and processed as an ordinary ceiling
+       instead - it's judged to be a real room-sized ceiling drop, not a
+       beam/bulkhead wrap.
+    2. Else, if per-room mode is on AND the model has any Rooms AND at least
+       one Room's bbox overlaps this ceiling -> PER-ROOM GENERATION (3.5).
+    3. Else -> the LEGACY FALLBACK ZONE path (3.6) - a whole-ceiling grid,
+       carved apart by subtracting every overlapping wall's footprint and
+       splitting the result into disconnected "zones."
+  !! A building whose Rooms aren't placed, or are unenclosed (Revit reports
+     0 area for those), will have EVERY ordinary ceiling routed through the
+     legacy fallback path instead of per-room generation - a silent, whole-
+     class behavior change with no error, just a different code path and by
+     extension different edge-case exposure. Worth an explicit pre-flight
+     check per building: are Rooms placed and enclosed everywhere a ceiling
+     needs one?
+
+3.5  Per-room generation rules
+----------------------------------------------------------------
+  - Room boundaries are read at the FINISH FACE (not centerline) via Revit's
+    own `Room.GetBoundarySegments` - this is why a room polygon is continuous
+    across doorways (it follows the room-bounding walls/separation lines) and
+    stops exactly at real wall surfaces.
+  - Each room's own polygon (minus its own interior islands, e.g. a shaft)
+    is intersected with the ceiling's own boundary_solid (so a ceiling's own
+    holes/fixture/column/beam cuts are still respected inside each room).
+  - A room contributing essentially zero overlap is skipped for this ceiling.
+  - If the total area actually covered by placed Rooms is under 98% of the
+    ceiling's own real area, a warning is logged naming the uncovered
+    percentage - any leftover sliver gets NO boards/furring at all.
+  - Each room gets its OWN fresh board/furring/main grid, anchored at that
+    room's own bounding-box corner (not the ceiling's overall bbox) - this is
+    what maximizes whole 4x8 sheets per room rather than one grid stretched
+    across the whole ceiling with lots of narrow rip pieces at room edges.
+  - Board/framing/screw NUMBERING is shared/flat across all rooms of one
+    ceiling (doesn't reset per room).
+
+3.6  Legacy fallback-zone rules (used when no Room applies)
+----------------------------------------------------------------
+  - Every wall overlapping the ceiling's own bbox is boolean-subtracted from
+    the ceiling's clip mask; the result is split into its disconnected
+    connected-component volumes ("zones") via Revit's own SolidUtils.
+    SplitVolumes.
+  - Each zone smaller than 0.5 ft in either direction is skipped as a sliver
+    (a ceiling sketch slightly overhanging past a real wall, for example).
+  - Same "fresh grid per zone, anchored at that zone's own bbox corner" rule
+    as per-room mode, for the same reason (whole sheets, not narrow rips).
+  - TOUCH-FILTERED wall cuts: a wall is only allowed to force a grid seam
+    inside a given zone if its (slightly inflated) footprint actually,
+    physically intersects that zone's real solid volume - not merely its
+    bounding box. This specifically prevents a NEIGHBORING zone's wall (whose
+    bbox happens to overlap this zone without the wall really touching it)
+    from injecting a false seam that would shred an otherwise-whole sheet -
+    this was a real, previously-shipped bug ("false splits shredding whole
+    sheets") that this touch-filter fixed.
+  - A RECURSIVE, "severs-only" cell splitter decides where to cut a 4x8 grid
+    cell at a wall: if a wall's face line runs the FULL width of the cell on
+    the other axis, split cleanly there; if the wall only starts/ends INSIDE
+    the cell (a stub, not a full-width run), split first at the wall's END
+    line so the remainder of the cell beyond the stub stays one whole piece
+    instead of being needlessly subdivided again at the wall's face line too.
+    This exists specifically to prevent a "doubled joint" artifact (an extra,
+    spurious seam) that a naive "always split at any wall face line" approach
+    produced on a previous version of this logic.
+
+3.7  Wall footprint collection for clipping - CURRENT (post-revert) behavior
+----------------------------------------------------------------
+  `collect_wall_plans()` currently returns a purely 2D (X-Y only) footprint
+  per wall, with NO Z-height information carried at all - meaning every
+  intersecting wall is treated as a full-height obstacle for clipping
+  purposes, regardless of the wall's real vertical extent.
+  - Axis-aligned walls (within ~1.15 degrees of X or Y) use the wall's real
+    element BOUNDING BOX for the footprint - deliberately avoids a known bug
+    where a wall's Location Line set to a face (not centerline) would make a
+    naive centerline-plus-half-width footprint miss half the wall, letting
+    ceiling boards penetrate it.
+  - Oblique walls fall back to the centerline +/- half-width approach (the
+    very method just described as buggy for axis-aligned walls) - so oblique
+    walls remain exposed to that inaccuracy. An oblique wall also contributes
+    NO forced grid seam (only axis-aligned walls do), though it still clips
+    the ceiling's mask so boards can't run through it.
+  !! HISTORY WORTH KNOWING FOR FUTURE TUNING: earlier this project, this
+     Z-blindness was identified as a real bug - a short, elevated "soffit
+     band" wall (e.g. Base Offset 8ft, Height 2ft, ending exactly at a
+     soffit's own bottom) was being treated as a permanent full-height
+     obstacle at the soffit's own ceiling level even though the wall had
+     already physically ended below that level by the time the ceiling's
+     drywall began - punching an unwanted, permanent hole in ceiling coverage
+     exactly the size of that band wall's own footprint. A fix existed
+     (carrying each wall's real Z-range and skipping a wall whose top sits at
+     or below the ceiling's own bottom face) and was verified working (a
+     board count changed from 6 to 8, closing the hole with zero new
+     overlap) - but it was REVERTED at the user's explicit, repeated request,
+     because the added coverage was judged "not required." The fix itself is
+     preserved in git history (look for "Z-blind" / "collect_wall_plans" in
+     the commit log) and is a clean, ready-to-reapply candidate if this exact
+     coverage gap is reported again on a future building with similar
+     elevated band walls.
+
+3.8  Column/beam cutout rule
+----------------------------------------------------------------
+  Every column/beam element's own real bbox is expanded outward by
+  COLUMN_BEAM_CLEARANCE_FT (currently 0.5 in, deliberately matching the
+  column/beam scripts' own drywall thickness - see Part 4) and punched as a
+  cutout through any ceiling/soffit board whose own Z-band overlaps that
+  column/beam's real Z-range (so a column on a different floor doesn't
+  spuriously cut a ceiling that's nowhere near it).
+  !! Because this clearance constant must exactly track the column/beam
+     scripts' own board thickness constant to produce a flush cut, changing
+     drywall thickness in ONE of these families of scripts without updating
+     the other reintroduces a visible gap or overlap at every column/beam
+     that a ceiling/soffit wraps around.
+
+3.9  Soffit 2-board flow (the layout used ONLY for true soffits)
+----------------------------------------------------------------
+  Instead of a 4x8 grid, a soffit's own outline is simplified (collinear/
+  duplicate vertices removed) and handled by shape:
+    - A 6-corner L-shaped outline: found the L's one reflex (inner) corner
+      and the one bounding-box corner that's genuinely missing (the notch),
+      and split into exactly 2 rectangles meeting at the reflex point with a
+      butt joint - one board per leg of the L.
+    - A plain 4-corner rectangle, or any other corner count: falls back to a
+      simple bbox-halves split down the midline of whichever dimension is
+      longer.
+  Each resulting board is boolean-intersected against the wall-subtracted
+  clip mask, so it physically ends exactly at the real walls the soffit spans
+  between. Warnings are logged if a resulting board falls outside the 2-16 ft
+  length range, or if a layer doesn't come out to exactly 2 boards (e.g. one
+  leg got clipped away to nothing by a wall). Soffits get furring only - never
+  mains/hangers regardless of span, and never the ordinary 4x8 grid.
+
+3.10  Splicing rule (furring & mains on long runs)
+----------------------------------------------------------------
+  A run longer than a stock channel length (furring 12ft, mains 16ft) is
+  broken into overlapping, stock-length pieces that lap by a fixed amount at
+  each joint (furring ~8in, mains 12in, per ASTM C754); adjacent rows/runs are
+  staggered relative to each other (their first piece is shortened by a fixed
+  offset) so splice joints in neighboring runs don't line up; alternating
+  spliced pieces are nudged slightly in Z to visually read as a nested lap.
+
+
+================================================================================
+PART 4 - COLUMN & BEAM SCRIPTS
+================================================================================
+Files: origin_column_assembly_v1.py, origin_beam_assembly_v1.py
+These are drywall-WRAP-ONLY generators - no structural framing/studs are ever
+added inside a column or beam by either script; they only wrap the existing
+member in drywall boards.
+
+4.1  Key constants (identical values in both files)
+----------------------------------------------------------------
+  DRYWALL_T_FT          0.5 in       Board thickness, offset outside the real
+                                     column/beam's own bounding-box face
+  MAX_BOARD_FT          8.0 ft       Max length of one split segment (matches
+                                     the wall script's own panel-length
+                                     convention and real stock sheet sizes;
+                                     was previously 16 ft, "far larger than a
+                                     real gypsum sheet," and was tightened
+                                     after a direct user report)
+  MIN_BOARD_FT          2.0 ft       Below this: a WARNING only, board still made
+  MIN_ELEM_FT           0.5 ft       Host element smaller than this: skipped
+  DELETE_PREVIOUS       True         Same idempotent-rerun pattern as elsewhere
+  COLOR_BOARDS          True         Assign the shared drywall material
+
+4.2  Element discovery
+----------------------------------------------------------------
+  Column script collects BOTH architectural columns (OST_Columns) AND
+  structural columns (OST_StructuralColumns) - covers either/both category
+  conventions. Beam script collects ONLY OST_StructuralFraming.
+  !! A building that models beam-like or column-like members under a
+     different category (a generic-model family, an in-place family, a
+     precast-specific category) is INVISIBLE to these collectors with no
+     warning that anything was missed - the run summary's processed-count
+     will simply be lower than expected, with nothing flagging why.
+
+4.3  Skip conditions
+----------------------------------------------------------------
+  Column: skipped if its footprint's shorter side is under 0.05 ft, or its
+  vertical extent is under MIN_ELEM_FT (0.5 ft) - a combined "degenerate
+  body" check.
+  Beam: skipped if its vertical thickness is under 0.05 ft ("degenerate
+  body"), or the longer of its X/Y bbox span is under MIN_ELEM_FT (0.5 ft,
+  "too short").
+
+4.4  Box-layout geometry - the actual wrap shape
+----------------------------------------------------------------
+  COLUMN (4 boards per vertical segment, full height coverage):
+    - The two boards on the X-min and X-max faces WRAP THE CORNERS - each one
+      extends past BOTH the +Y and -Y corners by one board thickness.
+    - The two boards on the Y-min and Y-max faces BUTT BETWEEN the X-face
+      boards - they run only the column's own footprint width, no wrap.
+    - This "X wraps, Y butts" choice is a FIXED, ARBITRARY convention -
+      column orientation/aspect ratio is never consulted; every column in
+      every building gets the same wrap axis regardless of true shape or
+      orientation relative to the building.
+
+  BEAM (3 boards per along-axis segment - bottom + 2 sides, no top at all):
+    - The BOTTOM board is the corner-wrapping member: it drops below the
+      beam's real bottom by one board thickness AND extends past BOTH side
+      faces by one board thickness.
+    - The two SIDE boards butt against the bottom board, running only from
+      the beam's own (unextended) bottom line up to its own top - no wrap.
+    - The TOP of a beam is left completely bare - by design, since "the beam
+      top meets the slab" in real construction.
+    - Which axis is "the beam's length" is decided purely by whichever of the
+      beam's own X or Y bbox span is larger (ties favor X) - no rotation-
+      awareness beyond that simple axis pick.
+
+4.5  Long-run splitting
+----------------------------------------------------------------
+  A run is divided into the SMALLEST number of EQUAL-length segments such
+  that every segment is <= MAX_BOARD_FT (8 ft) - e.g. an 11 ft run becomes
+  two ~5.5 ft segments, NOT an 8 ft piece plus a 3 ft remainder. If a
+  resulting segment ends up under MIN_BOARD_FT (2 ft), that's logged as a
+  warning only - the board is still created, not rejected or resized.
+
+4.6  Clipping against other pipeline output
+----------------------------------------------------------------
+  Same core mechanism as described in Part 1.6 (real-solid boolean
+  subtraction, "trusted empty result" drops the board entirely if fully
+  covered). !! The run-order dependency described in 1.6 is the single most
+  important operational rule for these two scripts specifically - their
+  corner-wrap boards can only clip correctly against wall/ceiling drywall
+  that ALREADY EXISTS in the model at the moment this script starts, which
+  means walls (and presumably ceilings) MUST be generated first, in the same
+  session, before columns/beams are run - and re-run again any time walls or
+  ceilings are regenerated afterward for any reason.
+  Additionally: since both scripts use their own separate identity tag
+  (APP_ID), if BOTH beams and columns are generated in the same session, the
+  one that runs SECOND will correctly see and clip against the first one's
+  already-placed boards - but nothing enforces a preferred order BETWEEN
+  beams and columns themselves; only the walls-before-beams/columns ordering
+  is explicitly documented.
+
+4.7  Naming and host tagging
+----------------------------------------------------------------
+  Beam -> B### (e.g. B001), Column -> K### (e.g. K001), assigned in Revit
+  collector order (not stable across model edits that add/remove elements -
+  a re-run after such an edit could reassign different numbers to the SAME
+  physical element, though the delete-previous cleanup still works correctly
+  regardless since it keys off the script's own tag, not the number).
+  Boards: DP-<host>-<seq>, one flat counter per host element across every
+  board/segment emitted for it.
+
+
+================================================================================
+PART 5 - CONSOLIDATED "THINGS THAT WILL DIFFER PER BUILDING" CHECKLIST
+================================================================================
+This is the single most important section for the stated goal (finetuning for
+~100 environments). Everything below is either a hardcoded string/path tied to
+THIS building/machine, or an assumption that a differently-modeled building
+could violate silently (no crash, no warning - just wrong or missing output).
+
+5.1  Hardcoded absolute file paths (will simply fail or write to a bogus
+     location on any other machine/deployment):
+     - Every script's own MANIFEST_PATH (5 separate hardcoded paths, one per
+       script/variant) - none of them include a per-building or per-run
+       identifier either, so running the SAME script twice against two
+       different buildings from the same machine just overwrites the first
+       manifest with the second.
+     - OUTLET_RFA_PATH (the outlet family file location).
+     - The Family Template scan path used when auto-creating the outlet
+       family (falls back to a hardcoded "C:\ProgramData\Autodesk" scan if
+       the more portable app.FamilyTemplatePath lookup fails).
+     ACTION FOR 100-BUILDING ROLLOUT: parameterize all manifest paths (e.g.
+     derive from the active document's own name/folder, or pass in
+     explicitly) rather than hardcoding a single developer's Downloads folder.
+
+5.2  Exact-string / substring name-matching that WILL misclassify silently:
+     - SOFFIT_BAND_WALL_TYPE_NAME = "Generic - 2'" (wall script) - an EXACT
+       Wall Type Name match with zero fuzzy fallback. Any other building's
+       soffit band walls almost certainly use a different type name.
+     - The soffit/ceiling classifier: "soffit" as a case-insensitive
+       SUBSTRING of the Ceiling's type name or type-family name. Any other
+       naming convention (different word, different language, opaque code)
+       => silently processed as an ordinary ceiling instead.
+     - The fire-rating keyword list (walls and ceilings both): English-only,
+       fixed list of ~10 substrings, plus one exact parameter name lookup
+       ("Fire Rating"). A model using a custom parameter name or non-English
+       type names will be silently treated as non-rated.
+     ACTION: before running on a new building, confirm (a) what its soffit/
+     bulkhead elements are actually named, (b) what its fire-rated wall types
+     are actually named/parameterized, (c) what its soffit band wall TYPE is
+     actually called - and update these strings/lists per-building, or
+     generalize the matching (e.g. a configurable list of soffit keywords
+     instead of one hardcoded substring).
+
+5.3  Building-specific one-off patches that do nothing (silently) elsewhere:
+     - The wall-008/wall-010 collinear end-stud-clearance patch (wall
+       script, 2.10). Confirmed by the user as scoped to this one building's
+       geometry - will not trigger, and will not error, on any other
+       building. If the same visual symptom (a board reaching slightly past
+       a collinear neighbor's own end stud at a column corner) recurs on a
+       different building, this is the pattern to copy and re-key to that
+       building's own wall numbers.
+
+5.4  Category assumptions that could miss real elements:
+     - Columns: only OST_Columns + OST_StructuralColumns.
+     - Beams: only OST_StructuralFraming.
+     - Ceiling/soffit wall-clipping: only true Revit Wall elements with a
+       straight Line location curve (curved walls, or partitions modeled as
+       generic/in-place families, are invisible to the clip logic).
+     A building whose modeling team used different categories for any of
+     these element types will have those elements silently skipped.
+
+5.5  Cross-constant consistency requirements (easy to break by editing only
+     one file):
+     - Column/beam DRYWALL_T_FT (currently 0.5in) must exactly match the
+       ceiling/soffit scripts' COLUMN_BEAM_CLEARANCE_FT for cutouts to land
+       flush - these live in DIFFERENT files and must be updated together.
+     - The shared "ORIGIN Drywall Base" material/subcategory NAME string
+       must be spelled identically across every one of the 5 scripts, or
+       each script that has a typo'd/differing copy will create its OWN
+       separate material instead of reusing the shared one.
+     - SOFFIT_BAND_WALL_TYPE_NAME is also referenced by at least one
+       auxiliary bridge script outside the 5 main generators - must be kept
+       in sync there too if it's ever changed.
+
+5.6  Assumptions baked into the geometry logic itself (not fixable by
+     changing a constant - would need actual new code for full generality):
+     - Every board/box in the pipeline is built axis-aligned in world X/Y/Z.
+       A building with any rotated wing, or columns/beams not aligned to the
+       model's global axes, gets a correctly-clipped-at-the-ends but LOOSE/
+       over-sized wrap box around an angled member (columns/beams), or an
+       inefficient (extra rip pieces) but still-correct board grid (ceilings/
+       walls) - not wrong, but not optimal, and worth knowing about ahead of
+       time rather than being surprised by extra small offcut boards.
+     - The axis-aligned-wall tolerance (~1.15 degrees off true X/Y) is a
+       fixed threshold; a building with a deliberate few-degrees true-north
+       skew (common in real projects) could have EVERY wall classified as
+       "oblique," losing both the more accurate bbox-based footprint and the
+       forced board-grid seam at every single wall - worth explicitly
+       checking a new building's overall rotation before running it.
+     - Ceilings must be genuinely flat (bottom face pointing very close to
+       straight down) - sloped/vaulted/coffered ceilings are not supported,
+       silently skipped.
+     - Straight walls only - curved/spline walls are silently skipped
+       everywhere.
+     - Feet-based imperial units throughout every constant; no metric-project
+       awareness (Revit's internal engine is always feet regardless of
+       display units, so this mostly matters only for a human tuning a
+       constant by eye against a metric drawing).
+
+5.7  Silent caps / omissions worth actively checking after any run:
+     - MAX_SCREWS_PER_WALL / MAX_SCREWS_PER_CEILING (8000 each, only relevant
+       if screws are ever turned back on) truncate with NO warning once hit.
+     - HANGER_MAX_AREA_SF is declared but not enforced anywhere - don't rely
+       on it as a real safety check if hangers are ever turned on.
+     - A sheet overlapping 2+ openings at once falls back to a less-precise
+       boolean "multicut" - check the "multi_opening_boolean_sheets" count in
+       a run's summary; a large count on a new building may be worth a visual
+       spot-check.
+     - Any per-element exception anywhere just produces a warning + skip, not
+       a failed run - ALWAYS review the full warnings list and the
+       processed/skipped counts after running on a new building, since a
+       silent under-run looks identical to a fully successful one at a glance.
+
+
+================================================================================
+PART 6 - RECOMMENDED PRE-FLIGHT CHECKLIST FOR EACH NEW BUILDING
+================================================================================
+Before running the pipeline on a new/unfamiliar Revit model, check:
+
+  [ ] Are all soffit/bulkhead ceilings named with a word this pipeline's
+      substring test will recognize (currently just "soffit")? If not,
+      either rename the types in the model, or generalize the classifier.
+  [ ] What is this building's actual soffit BAND WALL type name? Update
+      SOFFIT_BAND_WALL_TYPE_NAME (wall script) to match, exactly.
+  [ ] Are this building's fire-rated wall/ceiling types named/parameterized
+      in a way the existing keyword list + "Fire Rating" parameter lookup
+      will catch? If the building uses a custom parameter name, either add
+      it to the parameter check or accept that rated walls may come out
+      as single-layer by mistake.
+  [ ] Are Rooms placed and enclosed everywhere a ceiling needs one? If not,
+      those ceilings will silently fall back to the legacy zone-splitting
+      path instead of per-room generation.
+  [ ] Are columns/beams modeled under the expected Revit categories
+      (OST_Columns / OST_StructuralColumns / OST_StructuralFraming)? If the
+      building uses generic-model or in-place families for these, they will
+      be invisible to the pipeline.
+  [ ] Is the building's overall rotation close enough to true model X/Y that
+      "axis-aligned" walls/columns/beams will actually be recognized as such
+      (within about 1 degree)? A rotated site plan may need either a model-
+      rotation compensation or acceptance of degraded (oblique-path) results.
+  [ ] Update EVERY script's MANIFEST_PATH (and OUTLET_RFA_PATH) to a location
+      appropriate for this run/building, so manifests from different
+      buildings don't overwrite each other.
+  [ ] Confirm no unrelated BIM standard on this project already relies on the
+      Wall/Ceiling "Mark" parameter or the generated elements' "Comments"
+      parameter for its own purposes - this pipeline will overwrite Mark on
+      every host element it processes and uses Comments as its sole
+      ownership/cleanup key.
+  [ ] After the first full run, review the returned "warnings" list and the
+      processed/skipped element counts in EVERY script's OUT summary before
+      trusting the run was complete - a silently-skipped element produces no
+      visible failure.
+  [ ] Run the 5 scripts in the required order: Walls -> Ceilings/Soffits ->
+      Columns/Beams - and re-run Columns/Beams again after ANY later re-run
+      of Walls or Ceilings/Soffits, even for an apparently unrelated fix.
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================

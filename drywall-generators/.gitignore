@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.dyn.bak
+Thumbs.db
+# generated run outputs (sidecar manifests written by the generators)
+origin_*manifest*.json
+# live bridge runtime files (heartbeat/command/result churn every second)
+bridge/

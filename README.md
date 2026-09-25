@@ -23,6 +23,7 @@ script between runs.
 |---|---|
 | `pipeline/` | The command line (`origin.ps1`), the in-Revit runner, the batch pipeline, the ceiling-direction rule, diagnostics |
 | `ceiling-rebuild/` | The per-room ceiling rebuild — all the geometry logic, its own batch and live drivers, and the probes kept from working the problems out |
+| `drywall-generators/` | The five drywall generators (walls, ceilings, soffits, columns, beams), the outlet-box families, the Dynamo graphs, and the `origin_bridge_*` probes |
 | `docs/` | `ORIGIN_COMMANDS.md` — the runbook |
 | `claude/` + `CLAUDE.md` | Knowledge base for working on this with Claude Code — architecture, every layout rule and why, how to verify live, decision log, open issues. Start at [`CLAUDE.md`](CLAUDE.md) |
 
@@ -87,7 +88,8 @@ Get-ChildItem pipeline\test_*_offline.py | ForEach-Object { python $_.FullName |
 python ceiling-rebuild/test_classifier_offline.py
 ```
 
-11 suites, 208 checks as of 2026-09-25. The generator-patching tests need `drywall_repo` (below).
+11 suites, 208 checks as of 2026-09-25. The generator-patching tests read the generators from
+`drywall-generators/` (or wherever `drywall_repo` points).
 
 ## Running it on another machine
 
@@ -99,12 +101,13 @@ Scripts still `exec` their dependencies by absolute path rather than importing t
 is deliberate, because Dynamo caches `sys.modules` across ticks and a stale module is a silent,
 expensive class of bug. The paths are just computed now instead of typed.
 
-**Two things genuinely live outside the repo**, so they are the only things to configure. Copy
+**The drywall generators ship in `drywall-generators/`** and are found automatically. Two keys can
+still be set, if a machine keeps its own copy of the generators or its models elsewhere. Copy
 `origin.config.json.example` to `origin.config.json` beside the two roots and set:
 
 | Key | What it is |
 |---|---|
-| `drywall_repo` | The five drywall generators — a separate repository, not this one |
+| `drywall_repo` | The five drywall generators — defaults to this repo's `drywall-generators/` |
 | `input_dir` | The folder your `.rvt` environments live in |
 
 Either can be overridden per-shell with `ORIGIN_DRYWALL_REPO` / `ORIGIN_INPUT_DIR`. Check what

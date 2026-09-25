@@ -17,17 +17,22 @@ Read this file, then the one in `claude/` that matches the task:
 
 ## Hard rules (do not break these)
 
-1. **The five drywall generators are NOT in this repo and must never be committed, vendored or
-   published.** `origin_wall_assembly_v4_phase2_notaper_noscrew_nojoint.py`,
+1. **The five drywall generators live in `drywall-generators/`** —
+   `origin_wall_assembly_v4_phase2_notaper_noscrew_nojoint.py`,
    `origin_ceiling_assembly_v1_notaper_noscrew_nojoint.py`, `origin_soffit_assembly_v1.py`,
-   `origin_column_assembly_v1.py`, `origin_beam_assembly_v1.py` live in a colleague's separate
-   repository (`origin_revit_drywall_scripts_v2_two_faces`). It is found at run time through the
-   `drywall_repo` setting (`origin.config.json` / `ORIGIN_DRYWALL_REPO`), never a hard-coded path.
-2. **Never edit a generator file.** To change generator behaviour, rewrite the relevant line in
-   the generator's *source string* just before it is compiled — every `pipeline/*.py` module with
-   an `apply_to_source(src)` does exactly this, and each checks its anchor text occurs exactly
-   once (and skips, reporting why, if it does not). Or post-process the DirectShapes the generator
-   made, after it runs (the `run(doc)` modules).
+   `origin_column_assembly_v1.py`, `origin_beam_assembly_v1.py` (plus the outlet families and the
+   Dynamo graphs they came with). They are the owner's own code, bundled here 2026-09-25 from his
+   local generator folder. The pipeline finds them through `drywall_repo`
+   (`ORIGIN_DRYWALL_REPO` → `origin.config.json` → this bundled folder → the original machine's
+   path), never a hard-coded path — check with `.\pipeline\origin.ps1 doctor`.
+2. **Do not edit a generator to change a rule.** Rewrite the relevant line in the generator's
+   *source string* just before it is compiled — every `pipeline/*.py` module with an
+   `apply_to_source(src)` does exactly this, and each checks its anchor text occurs exactly once
+   (and skips, reporting why, if it does not). Or post-process the DirectShapes the generator made,
+   after it runs (the `run(doc)` modules). This keeps each rule switchable and the generators
+   byte-identical to the working copy the live bridge runs. If a generator itself must change,
+   change it in the working copy and re-bundle — and re-run every `test_*_offline.py`, because the
+   patches anchor on exact generator text.
 3. **Nothing saves the model.** Every command changes the open Revit session only; the user saves.
    Revit can crash — say so plainly if it does, because unsaved work is gone.
 4. **Every rule is switchable** by a flag at the top of `pipeline/stage2_panels.py` (or in the
@@ -47,6 +52,8 @@ pipeline/            stage 2 (panels) + the CLI + every rule module + diagnostic
   origin_paths.py    resolves every path at run time (pipeline root, ceiling root, drywall repo)
   dynamo/            ORIGIN Pipeline Bridge.dyn - the polling bridge node
 ceiling-rebuild/     stage 1: split the blanket ceiling into one ceiling per room
+drywall-generators/  the five generators (walls, ceilings, soffits, columns, beams), outlet
+                     families, Dynamo graphs, and the origin_bridge_* probes used to build them
 docs/                ORIGIN_COMMANDS.md - the user-facing runbook
 claude/              this knowledge base
 ```

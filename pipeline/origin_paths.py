@@ -159,14 +159,24 @@ def _load_config():
 CONFIG, CONFIG_PATH = _load_config()
 
 
+# The repository ships the drywall generators beside pipeline/ (added 2026-09-25). A fresh clone
+# therefore finds them with no config at all; a machine with its own checkout elsewhere still
+# points at it with origin.config.json / ORIGIN_DRYWALL_REPO.
+_BUNDLED = {"drywall_repo": os.path.join(os.path.dirname(PIPELINE_ROOT), "drywall-generators")}
+
+
 def setting(key):
-    """Environment wins, then origin.config.json, then this machine's current value."""
+    """Environment wins, then origin.config.json, then the copy bundled in this repository,
+    then this machine's current value."""
     env = os.environ.get("ORIGIN_" + key.upper())
     if env:
         return env
     v = CONFIG.get(key)
     if v:
         return v
+    b = _BUNDLED.get(key)
+    if b and os.path.isdir(b):
+        return b
     return _DEFAULTS.get(key)
 
 

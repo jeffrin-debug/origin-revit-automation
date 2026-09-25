@@ -6,6 +6,11 @@ until you see the case behind them.
 
 ## 2026-09-25 (env 1F)
 
+- **Drywall generators bundled into this repo** (`drywall-generators/`). They are the owner's
+  own code; they had been kept out because every commit in their local folder carries the name
+  "Keshubh" — that was only a repo-local git identity on this machine. `origin_paths` finds the
+  bundled copy; stage 2 localises each generator's hard-coded `MANIFEST_PATH`.
+
 - **Narrow wall boards merge into a neighbour** within one 4×8 sheet ("can we merge them whole
   with the neighbour panel which doesn't go more than 8 feet"). First version merged a board twice
   in one round using its stale shape and lost wall 010's bottom 4 ft of board — fixed (one merge
@@ -39,5 +44,5 @@ until you see the case behind them.
   `course_cells_on_studs`).
 - Ceiling direction from the main door; header fallback for door-less envs.
 - All paths resolved at run time (`origin_paths.py`, `origin doctor`).
-- The drywall generators were deliberately left out of this public repo — a colleague's code with
-  uncommitted work; publishing it is not our call.
+- The drywall generators were left out of this repo at first, on the mistaken belief (from the git
+  author name) that they were a colleague's code — corrected 2026-09-25, see above.

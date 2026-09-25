@@ -62,4 +62,5 @@ send it with `send_command.ps1 <absolute path>`.
 Get-ChildItem pipeline\test_*_offline.py | ForEach-Object { python $_.FullName | Select-Object -Last 1 }
 python ceiling-rebuild\test_classifier_offline.py
 ```
-All pass as of 2026-09-25 (208 checks). The generator-patching tests need `DRYWALL_REPO`.
+All pass as of 2026-09-25 (208 checks). The generator-patching tests read the bundled
+`drywall-generators/` unless `drywall_repo` points elsewhere.

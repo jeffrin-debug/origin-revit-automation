@@ -72,14 +72,16 @@ Every step's report lands in the run report under its own key (`soffit_raise`,
 
 `origin_paths.py` resolves everything from its own file location: `PIPELINE_ROOT`,
 `CEILING_ROOT` (sibling folder named `ceiling-rebuild` / `ceiling_rebuild` /
-`origin_ceiling_rebuild`), and `DRYWALL_REPO` from `origin.config.json` or
-`ORIGIN_DRYWALL_REPO`. Run `.\pipeline\origin.ps1 doctor` on a new machine. Tests that patch a
+`origin_ceiling_rebuild`), and `DRYWALL_REPO` from `ORIGIN_DRYWALL_REPO`, `origin.config.json`,
+then the bundled `drywall-generators/` beside `pipeline/`. Run `.\pipeline\origin.ps1 doctor` on a new machine. Tests that patch a
 generator (`test_wall_*`, `test_door_head_*`, `test_ceiling_end_joints_*`) need `DRYWALL_REPO` to
 resolve; the others do not.
 
 ## Manifests
 
-Each generator writes a JSON manifest into the drywall repo folder
+Each generator writes a JSON manifest into the drywall repo folder. Its `MANIFEST_PATH` is
+hard-coded to the machine it was written on; stage 2 rewrites it to the folder this run resolved
+(`_localise_manifest_path`, reported as `manifest_paths`), so it works on any machine
 (`origin_assembly_manifest_notaper_noscrew_nojoint.json`, `origin_ceiling_manifest_...json`, ...).
 Post-passes that remove or reshape boards update it (`infill_merge`, `ceiling_l_merge`,
 `soffit_detect`). Note the wall generator's own post-passes (stud trimming) do NOT update board
