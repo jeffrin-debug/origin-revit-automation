@@ -65,6 +65,16 @@ MERGE_CORNER_INFILL = True
 # generator's own "both end at the touch point" rule.
 OUTSIDE_CORNER_LAP = True
 
+# L-corner end studs sit wholly inside their own run - the through wall's behind the butting board,
+# the butting wall's flush at the through wall's face - instead of centred on the run's end, where
+# half a flange blocked the lapping board (C9 wall 004 x 002). See corner_end_studs.py.
+CORNER_END_STUDS_INSET = True
+
+# Lay each wall course out in sheets between its splits (partition tees, ceiling-height breaks)
+# instead of across them, so a span that fits one sheet is one board - see wall_split_first.py.
+# False restores the generator's tile-then-split order.
+WALL_SPLIT_FIRST = True
+
 # Wall drywall follows the ceiling over each STRETCH of a face, not the lowest ceiling anywhere
 # along it - needed now that every room keeps its own ceiling height. See wall_ceiling_profile.py.
 WALL_CAP_PER_STRETCH = True
@@ -80,6 +90,11 @@ DETECT_SOFFIT_WALLS = True
 # Rejoin ceiling boards the generator split with no wall on the seam - L-shaped results included,
 # as long as the pair still fits one 4x8 sheet - see ceiling_l_merge.py. False keeps the split.
 CEILING_L_MERGE = True
+
+# After every run that touches ceilings, sample each ceiling and report any area no board covers
+# (read-only) - see ceiling_coverage_check.py. The net under every "piece too small, dropped" path.
+CEILING_COVERAGE_CHECK = True
+CEILING_COVERAGE_STEPS = ("ceilings", "soffits", "columns", "beams")
 CEILING_MANIFEST = "origin_ceiling_manifest_notaper_noscrew_nojoint.json"
 WALL_MANIFEST = "origin_assembly_manifest_notaper_noscrew_nojoint.json"
 
@@ -316,6 +331,26 @@ def run_on_document(doc, manifest_dir=None, only=None):
                     src, report["corner_lap"] = cl["apply_to_source"](src)
                 except Exception:
                     report["corner_lap"] = {"applied": False, "error": traceback.format_exc()[-800:]}
+            if label == "walls" and CORNER_END_STUDS_INSET:
+                try:
+                    ce = {"__name__": "corner_end_studs"}
+                    cep = os.path.join(ROOT, "corner_end_studs.py")
+                    ce["__file__"] = cep
+                    exec(compile(open(cep).read(), cep, "exec"), ce)
+                    src, report["corner_end_studs"] = ce["apply_to_source"](src)
+                except Exception:
+                    report["corner_end_studs"] = {"applied": False,
+                                                  "error": traceback.format_exc()[-800:]}
+            if label == "walls" and WALL_SPLIT_FIRST:
+                try:
+                    sf = {"__name__": "wall_split_first"}
+                    sfp = os.path.join(ROOT, "wall_split_first.py")
+                    sf["__file__"] = sfp
+                    exec(compile(open(sfp).read(), sfp, "exec"), sf)
+                    src, report["wall_split_first"] = sf["apply_to_source"](src)
+                except Exception:
+                    report["wall_split_first"] = {"applied": False,
+                                                  "error": traceback.format_exc()[-800:]}
             if label == "walls" and DOOR_HEAD_COURSES:
                 try:
                     dhc = _load_door_head_courses()
@@ -431,6 +466,17 @@ def run_on_document(doc, manifest_dir=None, only=None):
         report["transaction_force_closed"] = True
     except Exception:
         report["transaction_force_closed"] = traceback.format_exc()
+
+    ran = [lbl for lbl in report["generators"]]
+    if CEILING_COVERAGE_CHECK and targets["ceilings"] and any(l in CEILING_COVERAGE_STEPS for l in ran):
+        try:
+            cc = {"__name__": "ceiling_coverage_check"}
+            ccp = os.path.join(ROOT, "ceiling_coverage_check.py")
+            cc["__file__"] = ccp
+            exec(compile(open(ccp).read(), ccp, "exec"), cc)
+            report["ceiling_coverage"] = cc["run"](doc)
+        except Exception:
+            report["ceiling_coverage"] = {"ok": False, "error": traceback.format_exc()[-800:]}
 
     if manifest_dir:
         copied = []

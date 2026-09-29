@@ -227,6 +227,26 @@ plan4 = match([rx], [ours_ok], core["CFG"])
 check("our ceiling already at the room's height is kept (no churn on reruns)",
       plan4["ceilings"][0]["status"] == "keep" and plan4["regions"][0]["status"] == "kept")
 
+# --- a narrow drop the room's probes miss (C9, 2026-09-28) -----------------------------------
+# Ceiling 393197: a 25" x 10' bulkhead strip at 2286 mm inside a 377 sf room whose 9 probes all
+# land ~80" apart in the room's west half. It was deleted as "stray: overlaps no region at all".
+print("\nNARROW DROP MISSED BY ROOM PROBES")
+F = 1 / 12.0
+big = rect(-600.77 * F, 78.33 * F, -198.27 * F, 329.83 * F)
+strip = rect(-383.77 * F, 159.33 * F, -264.27 * F, 184.33 * F)
+r12 = region(12, "C9 room 12", big, 3048.0)
+plan5 = match([r12], [ceiling(394105, big, 2438.4), ceiling(393197, strip, 2286.0)], core["CFG"])
+st5 = dict((c["id"], (c["status"], c["reason"])) for c in plan5["ceilings"])
+check("room probes really do miss the strip (the case is live)",
+      not any(core["point_in_region"](x, y, strip, []) for (x, y) in r12["_probes"]))
+check("the strip is kept as an authored drop, not deleted as a stray",
+      st5[393197][0] == "keep" and "authored drop" in (st5[393197][1] or ""), str(st5[393197]))
+check("the room's big drop is still kept alongside it", st5[394105][0] == "keep")
+check("room 12 gets nothing created", plan5["regions"][0]["status"] == "authored")
+check("a ceiling truly outside every room is still a stray",
+      match([r12], [ceiling(9, rect(100, 100, 110, 110), 2286.0)], core["CFG"])
+      ["ceilings"][0]["status"] == "delete")
+
 s = plan["summary"]
 print("\nSUMMARY  regions={} authored={} kept={} create={} bare={} sf  keep={} delete={}".format(
     s["regions_total"], s["regions_authored"], s["regions_kept"], s["regions_to_create"],

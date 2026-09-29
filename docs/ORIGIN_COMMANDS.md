@@ -213,6 +213,8 @@ Long runs: the default wait is 30 minutes. Override with `-TimeoutSec`.
 | `no result came back` | The node threw mid-command — `bridge\node_error.txt` has the traceback. |
 | `panels SKIPPED` | Separation failed verification. The reason is printed above it, starting with `!`. |
 | Grey patches that look like missing drywall | Judge the model in the **ORIGIN Assembly** 3D view only. In other views boards sit flush against the base wall and z-fight. |
+| `! CEILING GAPS: N uncovered patch(es)` | Some ceiling area has no board under it (sampled on a 1 in grid after every run that touches ceilings — walls, columns, beams and fixtures are left out). Each line gives the ceiling, the patch position and the nearest walls. Look there before saving; `ceiling_coverage_check.py`. |
+| `ceiling coverage check FAILED to run` | The check itself threw — the traceback is under `ceiling_coverage` in the detail report. The panels are unaffected. |
 | Edited a `.py` — restart? | No. The bridge re-reads every script from disk on each command. |
 | Edited the `.dyn` | Close the graph in Dynamo choosing **Don't Save**, then reopen. Dynamo caches node code and writes the stale version back over your edit. |
 
@@ -226,6 +228,7 @@ Long runs: the default wait is 30 minutes. Override with `-TimeoutSec`.
 | `origin_pipeline\origin.cmd` | So you can type `origin sep` |
 | `origin_pipeline\origin_run.py` | Runs inside Revit. Reads `_origin_cli.json`, runs the steps in canonical order on the open document |
 | `origin_pipeline\stage2_panels.py` | Drives the five drywall generators |
+| `origin_pipeline\ceiling_coverage_check.py` | Read-only: after the generators, proves every ceiling is fully boarded |
 | `origin_ceiling_rebuild\origin_ceiling_rebuild_core.py` | All the ceiling separation logic |
 | `origin_pipeline\bridge\` | `command.json` out, `result.json` back, `heartbeat.json` proof of life |
 

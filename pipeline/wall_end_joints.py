@@ -54,10 +54,14 @@ def _origin_wall_end_cells(cells, flo, fhi, stud_xs, opening_rects, wall_id, sid
                       "end_piece_now_in": round(((fhi - nj) if end == "far" else (nj - flo)) * 12, 2)})
         _ORIGIN_WALL_END_JOINTS.append(r)
 
+    # A joint that is one of the course's splits (a tee / ceiling break, when wall_split_first.py
+    # lays out between splits) is the edge of a span, not a sheet joint - never move it.
+    _is_split = globals().get("_origin_is_course_split") or (lambda x: False)
+
     # far end of the face
     j = cells[-1][0]
     piece = fhi - j
-    if piece < mn - tol:
+    if piece < mn - tol and not _is_split(j):
         start = cells[-2][0]
         cand = [s for s in studs if start + mn - tol <= s <= fhi - mn + tol and s < j
                 and fhi - s <= PANEL_LENGTH_FT + tol and clear_of_jambs(s)]
@@ -69,7 +73,7 @@ def _origin_wall_end_cells(cells, flo, fhi, stud_xs, opening_rects, wall_id, sid
     # near end of the face
     j = cells[0][1]
     piece = j - flo
-    if piece < mn - tol and len(cells) >= 2:
+    if piece < mn - tol and len(cells) >= 2 and not _is_split(j):
         stop = cells[1][1]
         cand = [s for s in studs if flo + mn - tol <= s <= stop - mn + tol and s > j
                 and s - flo <= PANEL_LENGTH_FT + tol and clear_of_jambs(s)]

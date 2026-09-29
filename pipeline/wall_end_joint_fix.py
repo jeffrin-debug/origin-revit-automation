@@ -248,6 +248,9 @@ def run(doc, dry_run=False):
             try:
                 _apply(doc, walls, r)
                 st.Commit()
+                # finalise the SetShapes now - left to the next SubTransaction, a rolled-back
+                # move would take them with it (see wall_narrow_merge.py, 2026-09-28)
+                doc.Regenerate()
                 used.update(ids)
                 rep["moved"].append(clean)
             except Exception as ex:

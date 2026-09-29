@@ -45,8 +45,10 @@ then runs its post-passes. **Order matters** — later steps measure against ear
 | 3 | Corner-infill patch built at the wrong height on raised walls (base offset counted twice) | `infill_z_fix` | bug fix, always on |
 | 4 | Wall boards follow the ceiling over each STRETCH of a face | `wall_ceiling_profile` | patch |
 | 5 | Outside corners: one board laps, the other butts behind it | `corner_lap` | patch |
+| 5a | L-corner end studs inside their own run (behind the butting board / flush at the face) | `corner_end_studs` | patch |
+| 5b | Sheets laid out between a course's splits, not across them | `wall_split_first` | patch |
 | 6 | Door head near a row joint → rows 4 + 2 + 4 ft | `door_head_courses` | patch |
-| 7 | No joint within 16 in of a face end (joint moved to a stud) | `wall_end_joints` | patch |
+| 7 | No joint within 16 in of a face end (joint moved to a stud; splits never moved) | `wall_end_joints` | patch |
 | **walls** — post-passes on the finished boards |
 | 8 | Delete redundant corner-infill strips; fold the rest into the board beside them | `infill_merge` | post-pass |
 | 9 | Joints still < 16 in from a hard end (T-junctions, trimmed ends) → move to a stud | `wall_end_joint_fix` | post-pass |
@@ -58,7 +60,8 @@ then runs its post-passes. **Order matters** — later steps measure against ear
 | 14 | No joint within 16 in of a wall (joint moved by whole furring bays) | `ceiling_end_joints` | patch |
 | **ceilings** — post-pass |
 | 15 | Rejoin boards split with no wall on the seam, L-shapes allowed, one 4×8 sheet | `ceiling_l_merge` | post-pass |
-| **soffits, columns, beams** | generators run as-is |
+| **soffits, columns, beams** | generators run as-is (columns wrap each exposed face and trim wall / ceiling pieces out of the wrap) |
+| **after all steps** | Every ceiling sampled on a 1 in grid for unboarded area (read-only) | `ceiling_coverage_check` | check |
 
 Patch modules expose `apply_to_source(src) -> (src, info)` and often `collect(ns, info)` to pull
 what they recorded out of the generator's namespace (e.g. `_ORIGIN_END_JOINTS`). Post-pass

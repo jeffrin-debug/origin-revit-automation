@@ -1092,6 +1092,7 @@ def corner_face_extents(wall, candidates):
     my_eid = eid_value(wall.Id)
     for (pe, din, ei) in [(start, d, 0), (end_pt, xyz_mul(d, -1.0), 1)]:
         best = None
+        l_here = []                                     # L partners at this end: (|s|, sx, sy, dir)
         for (other, oseg, wO) in candidates:
             if other.Id == wall.Id:
                 continue
@@ -1119,10 +1120,35 @@ def corner_face_extents(wall, candidates):
             sx = (ostart.X + oend.X) / 2.0 - X.X        # toward the other wall's body
             sy = (ostart.Y + oend.Y) / 2.0 - X.Y
             cand = (abs(s), scenario, Xp, sx, sy, wO / 2.0, my_eid > eid_value(other.Id))
+            if scenario == "L":
+                l_here.append((abs(s), sx, sy, oe, ostart, Xp, wO / 2.0))
             if best is None or cand[0] < best[0]:
                 best = cand
         if best is None:
             continue
+        # Two walls on one line that both END at this crossing from OPPOSITE sides are one wall
+        # running through - a T whose top is two segments. Butt into it like any T, each face
+        # against the piece on ITS side; taking just the nearer piece as an L wrapped a face round
+        # it into the other piece (2C 2026-09-28: wall 008 into 034 + the 2.4in stub 026 - 008's
+        # west face ran 1.87in into 034, and the overlap trim then cost 034's south boards a
+        # 1.25in strip). tee = [(sx, sy, Xp, hwO) of each piece], or None.
+        tee = None
+        if best[1] == "L":
+            for p1 in l_here:
+                for p2 in l_here:
+                    e1, e2 = p1[3], p2[3]
+                    if abs(e1.X * e2.Y - e1.Y * e2.X) >= 0.05 or (p1[1] * p2[1] + p1[2] * p2[2]) >= 0.0:
+                        continue                        # not parallel, or on the same side
+                    if max(p1[0], p2[0]) > best[0] + CORNER_JOIN_TOL_FT:
+                        continue
+                    off = abs((p2[4].X - p1[4].X) * e1.Y - (p2[4].Y - p1[4].Y) * e1.X)
+                    if off > p1[6] + p2[6]:
+                        continue                        # parallel, but not one line
+                    tee = [(p1[1], p1[2], p1[5], p1[6]), (p2[1], p2[2], p2[5], p2[6])]
+                    best = (best[0], "stem") + best[2:]
+                    break
+                if tee:
+                    break
         had_corner[ei] = True
         _, scenario, Xp, sx, sy, hwO, role_through = best
         for (side, nF) in faces:
@@ -1132,7 +1158,12 @@ def corner_face_extents(wall, candidates):
                 # concave corner the edge lands exactly on the other wall's finished surface.
                 val = (Xp + hwO) if ei == 0 else (Xp - hwO)
             elif scenario == "stem":
-                val = (Xp + hwO) if ei == 0 else (Xp - hwO)     # butt into the through wall's face
+                if tee:
+                    # the piece of a two-piece through wall on this face's side
+                    _p = max(tee, key=lambda q: nF.X * q[0] + nF.Y * q[1])
+                    val = (_p[2] + _p[3]) if ei == 0 else (_p[2] - _p[3])
+                else:
+                    val = (Xp + hwO) if ei == 0 else (Xp - hwO)     # butt into the through wall's face
             else:
                 inside = (nF.X * sx + nF.Y * sy) > 0.0
                 if inside:
@@ -1175,6 +1206,13 @@ def corner_face_extents(wall, candidates):
         ostart, oend, oe, olen = oseg
         if abs(dot(d, oe)) <= 0.95:
             continue                                   # not collinear with this wall
+        # Parallel is not collinear: only a wall ON this wall's line (centerlines closer than half
+        # the two thicknesses) can sit in the wrap's path. Checking direction alone let ANY
+        # parallel wall whose end lines up with a corner cancel that corner's wrap - 2C 2026-09-28:
+        # wall 003, 40in away, stopped DP-027-001A 1.87in short of DP-028-001B (14 corners in 2C).
+        _perp = abs((ostart.X - start.X) * d.Y - (ostart.Y - start.Y) * d.X)
+        if _perp > (get_wall_width(wall) + wO) / 2.0:
+            continue                                   # parallel, but on another line
         op0 = (ostart.X - start.X) * d.X + (ostart.Y - start.Y) * d.Y
         op1 = (oend.X - start.X) * d.X + (oend.Y - start.Y) * d.Y
         onear, ofar = (op0, op1) if op0 <= op1 else (op1, op0)
@@ -3588,12 +3626,16 @@ def trim_drywall_from_neighbor_studs(warnings):
                 blo, bhi, alo, ahi = bbj.Min.Y, bbj.Max.Y, bbi.Min.Y, bbi.Max.Y
                 if diy < dix:
                     continue
-            # must actually meet: overlap on the other two axes
+            # must actually meet: B has to pass INTO A's thickness, not just touch its face. A
+            # board merely touching the back of another (the legitimate lap at an outside corner)
+            # read as a crossing with the old tolerance test, and its corner wrap was clipped off
+            # as a "stub" (2C 2026-09-28: DP-022-001A touching DP-027-001A's inner face cost 027's
+            # west face 4.25in at the 027/034 corner).
             if axis == "x":
-                if (bbi.Max.Y < bbj.Min.Y - CLIP_STUB_TOL or bbj.Max.Y < bbi.Min.Y - CLIP_STUB_TOL):
+                if min(bbi.Max.Y, bbj.Max.Y) - max(bbi.Min.Y, bbj.Min.Y) <= CLIP_STUB_TOL:
                     continue
             else:
-                if (bbi.Max.X < bbj.Min.X - CLIP_STUB_TOL or bbj.Max.X < bbi.Min.X - CLIP_STUB_TOL):
+                if min(bbi.Max.X, bbj.Max.X) - max(bbi.Min.X, bbj.Min.X) <= CLIP_STUB_TOL:
                     continue
             if bbi.Max.Z < bbj.Min.Z - CLIP_STUB_TOL or bbj.Max.Z < bbi.Min.Z - CLIP_STUB_TOL:
                 continue

@@ -68,6 +68,25 @@ def wall_crosses(walls, vertical, c, lo, hi, tol):
     return False
 
 
+def on_butt_joint(boards, i, j, vertical, c, tol):
+    """True when some board other than i / j has an edge on line c with ANOTHER board touching it
+    across that line - two sheets butting there, i.e. a real joint the merge would step across."""
+    for k in range(len(boards)):
+        if k in (i, j):
+            continue
+        kb = boards[k]["box"]
+        edges = (kb[0], kb[2]) if vertical else (kb[1], kb[3])
+        if not any(abs(v - c) <= tol for v in edges):
+            continue
+        for m in range(len(boards)):
+            if m == k:
+                continue
+            e = shared_edge(kb, boards[m]["box"], tol)
+            if e is not None and e[0] == vertical and abs(e[1] - c) <= tol:
+                return True
+    return False
+
+
 def candidates(boards, walls, cfg=None):
     """boards = [{"mark", "box": (x0,y0,x1,y1,z0,z1), "layer"}], one ceiling. Returns every pair
     that passes tests 1-3, longest shared edge first: [(i, j, (vertical, c, lo, hi))]."""
@@ -97,20 +116,13 @@ def candidates(boards, walls, cfg=None):
             # 2. no wall on the seam
             if wall_crosses(walls, vertical, c, lo, hi, cfg["WALL_TOL_FT"]):
                 continue
-            # An L-merge only removes a NEEDLESS seam. A line other boards also end on is a real
-            # butt joint / grid line; folding a board across it would leave a stepped joint.
-            if abs(ea - eb) > tol:
-                on_joint = False
-                for k in range(len(boards)):
-                    if k in (i, j):
-                        continue
-                    kb = boards[k]["box"]
-                    edges = (kb[0], kb[2]) if vertical else (kb[1], kb[3])
-                    if any(abs(v - c) <= tol for v in edges):
-                        on_joint = True
-                        break
-                if on_joint:
-                    continue
+            # An L-merge only removes a NEEDLESS seam. A line where other boards BUTT each other
+            # is a real joint; folding a board across it would leave a stepped joint. A board that
+            # merely ENDS on the line - at a wall face or the ceiling outline, nothing on its other
+            # side - is no joint (C9 2026-09-28: DP-C009-023/-025 stop at wall 401103's face on
+            # y=85.58, and that alone kept DP-C009-019 + -020 apart).
+            if abs(ea - eb) > tol and on_butt_joint(boards, i, j, vertical, c, tol):
+                continue
             out.append((i, j, e))
     out.sort(key=lambda t: -(t[2][3] - t[2][2]))
     return out

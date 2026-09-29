@@ -222,6 +222,9 @@ else:
                 "soffit_walls": prep.get("soffit_walls"),
                 "ceiling_l_merge": prep.get("ceiling_l_merge"),
                 "orphan_ceiling_assemblies": prep.get("orphan_ceiling_assemblies"),
+                "ceiling_coverage": dict((k, v[:8] if isinstance(v, list) else v)
+                                         for k, v in (prep.get("ceiling_coverage") or {}).items())
+                                    or None,
                 "error": prep.get("error"),
             })
         except Exception:

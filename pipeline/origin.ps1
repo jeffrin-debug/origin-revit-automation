@@ -259,6 +259,28 @@ function Show-Step($name, $row) {
                 Write-Host ("               {0,-10} {1,-6} {2,6}s" -f $g.Name, $mark, $g.Value.sec)
             }
         }
+        # Every ceiling sampled for area no board covers - see ceiling_coverage_check.py.
+        $cc = $row.ceiling_coverage
+        if ($null -ne $cc) {
+            if ($cc.error) {
+                Write-Host ("             ceiling coverage check FAILED to run - see the detail report") -ForegroundColor Yellow
+            } elseif ($cc.ok) {
+                Write-Host ("             ceiling coverage: all {0} ceilings fully boarded ({1} in grid)" -f `
+                        $cc.ceilings_checked, $cc.grid_in) -ForegroundColor Green
+            } else {
+                Write-Host ("             ! CEILING GAPS: {0} uncovered patch(es) - check them before saving" -f `
+                        $cc.gap_count) -ForegroundColor Yellow
+                foreach ($g in @($cc.gaps)) {
+                    if ($null -eq $g) { continue }
+                    Write-Host ("               {0} ({1}): ~{2} sq in at x {3}..{4}, y {5}..{6} in  near {7}" -f `
+                            $g.mark, $g.ceiling, $g.approx_sq_in, $g.bbox_in[0], $g.bbox_in[2], `
+                            $g.bbox_in[1], $g.bbox_in[3], (@($g.near) -join ', ')) -ForegroundColor Yellow
+                }
+                foreach ($u in @($cc.unboarded)) {
+                    if ($null -ne $u) { Write-Host ("               {0} ({1}): NO boards at all" -f $u.mark, $u.ceiling) -ForegroundColor Yellow }
+                }
+            }
+        }
     }
     if ($null -ne $o.panels_only_view) {
         $pv = $o.panels_only_view

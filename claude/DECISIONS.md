@@ -4,6 +4,32 @@ Newest first. Each entry: what the user asked (their words where it matters), wh
 and anything that was reversed. Read this before "simplifying" a rule — several look arbitrary
 until you see the case behind them.
 
+## 2026-09-29 (env C9)
+
+- **L-corner end studs inset** (`corner_end_studs.py`). C9 wall 004 × 002: the through wall's end
+  stud, centred on the wall end, poked ⅝ in into the butting board's path; the stud-trim cut that
+  board back 3 in and left the stud end exposed. User picked "pull wall 004 back" over moving
+  wall 002's board (would float ⅝ in off its studs) or a return piece (panels still not meeting),
+  and asked for the generator rule too. Fixed live in C9 (`corner_close_active.py` +
+  `corner_close_butt_stud.py`, tagged `CORNER_CLOSED=2026-09-29`).
+- **Sheets laid out between splits** (`wall_split_first.py`). C9 wall 037: a sliver DP-037-003A
+  (1.37 in) left by the column trim beside a 64.5 in board that could have been one. User asked
+  "why sep sep panels", then "do A and the generator change": merged live (`merge_pair_active.py`)
+  and the generator's tile-then-split order changed. Not done yet (offered): re-running
+  `wall_narrow_merge` after the columns step.
+
+## 2026-09-26 … 09-28 (envs C9, 2C, 4D, B5)
+
+- **Column stud wraps** — every exposed column face wrapped like a wall; wall boards stop where
+  the column's panels meet them (replaces "board behind the column stays").
+- **Ceiling holes from dropped thin pieces** fixed in the generator (thin strips absorbed, last
+  course takes a bay) and **`ceiling_coverage_check.py`** added as a net for the next cause.
+- **L-merge blocked only by real butt joints**, not by boards ending on the same line.
+- **Collinear clamp = same line only**; **two collinear pieces at a crossing = one through wall**.
+- **Narrow authored drops kept** in stage 1 when the room's probes miss them.
+- `wall_narrow_merge` measures a board it already merged from the solid it built (Revit returned
+  the stale shape and a 0–96 in board was deleted on 2C wall 029).
+
 ## 2026-09-25 (env 1F)
 
 - **Drywall generators bundled into this repo** (`drywall-generators/`). They are the owner's

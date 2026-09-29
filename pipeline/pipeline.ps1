@@ -289,6 +289,19 @@ function Do-Review {
                         Write-Host ("      {0}: {1} warning(s)" -f $g.Name, $w.Count) -ForegroundColor Yellow
                     }
                 }
+                # uncovered ceiling area - ceiling_coverage_check.py
+                $cc = $d.panels.ceiling_coverage
+                if ($null -ne $cc) {
+                    if ($cc.ok) {
+                        Write-Host ("      ceilings: all {0} fully boarded" -f $cc.ceilings_checked) -ForegroundColor DarkGray
+                    } else {
+                        Write-Host ("      ! CEILING GAPS: {0} patch(es), {1} unboarded - look before approving" -f `
+                                $cc.gap_count, @($cc.unboarded).Count) -ForegroundColor Yellow
+                        foreach ($g in @($cc.gaps | Select-Object -First 5)) {
+                            if ($g) { Write-Host ("        {0}: ~{1} sq in near {2}" -f $g.mark, $g.approx_sq_in, (@($g.near) -join ', ')) -ForegroundColor Yellow }
+                        }
+                    }
+                }
             } catch { }
         }
         Write-Host '      [O] open in Revit   [A] approve   [R] reject   [S] skip   [Q] stop reviewing'

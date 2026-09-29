@@ -1,6 +1,6 @@
 # Open issues and known limits
 
-As of 2026-09-25, measured on 1F. Each has where to look.
+As of 2026-09-29 (1F, then C9). Each has where to look.
 
 ## Defects
 
@@ -10,6 +10,18 @@ As of 2026-09-25, measured on 1F. Each has where to look.
   carries the split along rather than adding one.
 - **Soffit side boards run into the ceiling slab** where the soffit's own Revit wall does
   (before the raise: 4¼ in into C001). Hidden, but extra material.
+- **Column trim can leave a wall sliver** — columns run after `wall_narrow_merge`, so a board
+  the column step cuts down to a few inches is never merged (C9 DP-037-003A, fixed by hand).
+  `wall_split_first` removes the case where the joint was needless; a real joint just before a
+  column can still leave one. Candidate: re-run `wall_narrow_merge` after columns.
+- **T-stem end studs are still centred** on the through wall's face, so ⅝ in of flange sits in the
+  through wall's board and core; the stud-trim notches that board (hidden inside the joint).
+  `corner_end_studs` only changes L-corners.
+- **C9 exposed studs** — `scan_exposed_studs.py` finds 15 on 10 walls (worst 403602: 4),
+  2026-09-29, none yet looked at.
+- **Generator changes of 2026-09-29 not yet run live** — `corner_end_studs` and
+  `wall_split_first` are tested offline only; the next walls run on C9 replaces the hand fixes
+  there with the generator's own output and shifts joints on faces with tees / ceiling breaks.
 
 ## Limits (by design, reported each run)
 
@@ -18,8 +30,9 @@ As of 2026-09-25, measured on 1F. Each has where to look.
   (1F: 013-004A, 013-003B, 014-003B, 016-004B, 016-005B). Listed in the run report under
   `wall_narrow_merge.left`.
 - **Narrow ceiling COURSES** (a ripped last 4 ft row against a wall — 1F: DP-C001-004 10 in,
-  DP-C003-005/006 3 in). The 16 in rule covers joints along a course, not the course width.
-  Candidate next rule: shift the course start so both end courses are ≥ 16 in.
+  DP-C003-005/006 3 in). Only a course under 3 in is fixed now (`course_bands` takes a 16 in
+  bay); 3–16 in courses remain. Candidate next rule: shift the course start so both end courses
+  are ≥ 16 in.
 - **Fire-rated two-layer walls**: `door_head_courses` re-lays only the room-facing layer; the
   second layer keeps its 2 ft stagger, so both layers can share a 6 ft joint. No rated walls in
   1F.

@@ -78,7 +78,37 @@ def pick(narrow, cands):
 
 # ------------------------------------------------------------------ Revit side
 
-def _collect(doc):
+class _BB(object):
+    def __init__(self, mn, mx):
+        self.Min, self.Max = mn, mx
+
+
+def _solid_bb(sol):
+    b = sol.GetBoundingBox()
+    t = b.Transform
+    pts = [t.OfPoint(XYZ(x, y, z)) for x in (b.Min.X, b.Max.X) for y in (b.Min.Y, b.Max.Y)
+           for z in (b.Min.Z, b.Max.Z)]
+    return _BB(XYZ(min(p.X for p in pts), min(p.Y for p in pts), min(p.Z for p in pts)),
+               XYZ(max(p.X for p in pts), max(p.Y for p in pts), max(p.Z for p in pts)))
+
+
+def _board_bb(ds, mark, fresh):
+    """A board merged earlier in this run is measured from the solid we built for it: reading it
+    back from Revit can still return its PRE-merge shape (2C 2026-09-28, wall 029: round 2 saw
+    DP-029-003A at 48-96in after it had absorbed 001A, merged that stale shape into 005A and
+    deleted 003A - the 0-96in board went with it)."""
+    if fresh and mark in fresh:
+        return _solid_bb(fresh[mark])
+    return ds.get_BoundingBox(None)
+
+
+def _board_solids(ds, mark, fresh):
+    if fresh and mark in fresh:
+        return [fresh[mark]]
+    return _solids(ds)
+
+
+def _collect(doc, fresh=None):
     walls = {}
     for w in FilteredElementCollector(doc).OfClass(Wall).WhereElementIsNotElementType():
         try:
@@ -101,7 +131,8 @@ def _collect(doc):
         wid = [t.strip()[5:] for t in cm.split("|") if t.strip().startswith("WALL=")]
         if not wid or wid[0] not in walls:
             continue
-        bb = ds.get_BoundingBox(None)
+        mark = _par(ds, BuiltInParameter.ALL_MODEL_MARK)
+        bb = _board_bb(ds, mark, fresh)
         if bb is None:
             continue
         u, wm = walls[wid[0]]
@@ -113,7 +144,7 @@ def _collect(doc):
         pts = [XYZ(x, y, 0) for x in (bb.Min.X, bb.Max.X) for y in (bb.Min.Y, bb.Max.Y)]
         al = [p.DotProduct(ax) * 12 for p in pts]
         nr = [p.DotProduct(nx) * 12 for p in pts]
-        boards.append({"ds": ds, "cm": cm, "mark": _par(ds, BuiltInParameter.ALL_MODEL_MARK),
+        boards.append({"ds": ds, "cm": cm, "mark": mark,
                        "wall": wm, "axis": "x" if ax.X else "y",
                        "plane": (round(min(nr), 2), round(max(nr), 2)),
                        "r": (min(al), bb.Min.Z * 12, max(al), bb.Max.Z * 12)})
@@ -152,8 +183,8 @@ def _bridge(n, c, half_in=0.01):
         return None
 
 
-def plan(doc):
-    boards = _collect(doc)
+def plan(doc, fresh=None):
+    boards = _collect(doc, fresh)
     out = []
     for b in boards:
         if b["r"][2] - b["r"][0] >= NARROW_IN - 1e-6:
@@ -177,8 +208,9 @@ def run(doc, dry_run=False, max_rounds=5):
     """Merge, re-plan, merge again - a merge can make the next one possible (or impossible) -
     until a round changes nothing."""
     total = {"narrow": None, "merged": [], "left": [], "rounds": 0}
+    fresh = {}          # mark -> the solid we SetShape'd on it this run (see _board_bb)
     for _ in range(1 if dry_run else max_rounds):
-        rep = _run_once(doc, dry_run)
+        rep = _run_once(doc, dry_run, fresh)
         total["rounds"] += 1
         if total["narrow"] is None:
             total["narrow"] = rep["narrow"]
@@ -191,8 +223,10 @@ def run(doc, dry_run=False, max_rounds=5):
     return total
 
 
-def _run_once(doc, dry_run=False):
-    rows = plan(doc)
+def _run_once(doc, dry_run=False, fresh=None):
+    if fresh is None:
+        fresh = {}
+    rows = plan(doc, fresh)
     rep = {"narrow": len(rows), "merged": [], "left": []}
     todo = [r for r in rows if r.get("into")]
     rep["left"] = [r for r in rows if not r.get("into")]
@@ -224,10 +258,11 @@ def _run_once(doc, dry_run=False):
             try:
                 doc.Regenerate()
                 for (d, rr) in ((keep, keep["r"]), (lose, lose["r"])):
-                    bb = d["ds"].get_BoundingBox(None)
+                    bb = _board_bb(d["ds"], d["mark"], fresh)
                     if bb is None or abs(bb.Min.Z * 12 - rr[1]) > 0.05 or abs(bb.Max.Z * 12 - rr[3]) > 0.05:
                         raise Exception("{} changed since it was planned".format(d["mark"]))
-                sk, sl = _solids(keep["ds"]), _solids(lose["ds"])
+                sk = _board_solids(keep["ds"], keep["mark"], fresh)
+                sl = _board_solids(lose["ds"], lose["mark"], fresh)
                 if len(sk) != 1 or len(sl) != 1:
                     raise Exception("not single solids")
                 u = BooleanOperationsUtils.ExecuteBooleanOperation(sk[0], sl[0], BooleanOperationsType.Union)
@@ -264,6 +299,14 @@ def _run_once(doc, dry_run=False):
                     p.Set(keep["cm"] + " NARROW_MERGED={}".format(lose["mark"]))
                 doc.Delete(lose["ds"].Id)
                 st.Commit()
+                # Regenerate NOW, outside any later SubTransaction: a SetShape is only finalised at
+                # the next regeneration, and if that happens inside the NEXT merge's SubTransaction
+                # and that merge is rolled back, this board's new shape is rolled back with it -
+                # its absorbed neighbour already deleted (2C 2026-09-28: DP-029-005A / DP-026-003B
+                # kept only their own 7.75in, the boards merged into them gone).
+                doc.Regenerate()
+                fresh[keep["mark"]] = u
+                fresh.pop(lose["mark"], None)
                 gone.add(lose["mark"])
                 gone.add(keep["mark"])
                 rep["merged"].append(clean(r))

@@ -63,5 +63,27 @@ print("plain rectangle split still merges")
 R = [board("A", 0, 0, 40, 48), board("B", 40, 0, 90, 48)]
 check("two halves of one 4x8 cell", len(candidates(R, [])) == 1)
 
+print("C9 C394105 - a board that only STOPS at a wall on the seam line is no joint (2026-09-28)")
+C9 = [board("DP-C009-018", -360.77, 78.34, -312.77, 155.33),
+      board("DP-C009-019", -312.77, 85.58, -264.77, 126.34),
+      board("DP-C009-020", -312.77, 78.34, -290.27, 85.58),
+      board("DP-C009-021", -312.77, 126.34, -264.77, 155.33),
+      board("DP-C009-023", -264.77, 85.58, -216.77, 155.33),
+      board("DP-C009-025", -216.77, 85.58, -198.28, 126.34),
+      board("DP-C009-026", -216.77, 126.34, -198.28, 184.33)]
+W401103 = wall(-287.27, 79.58, -164.77, 85.58)     # 023 / 025 stop on its face, y = 85.58
+W401948 = wall(-290.27, 78.33, -284.27, 85.58)     # ends at y = 85.58 - why the cell was cut there
+pairs = [(C9[i]["mark"], C9[j]["mark"]) for (i, j, e) in candidates(C9, [W401103, W401948])]
+check("DP-C009-019 + DP-C009-020 merge (48 x 48in, one sheet)",
+      ("DP-C009-019", "DP-C009-020") in pairs, str(pairs))
+check("...and otherwise only the plain 019 + 021 rectangle join it already made",
+      sorted(pairs) == [("DP-C009-019", "DP-C009-020"), ("DP-C009-019", "DP-C009-021")], str(pairs))
+
+print("a real butt joint on the seam line still blocks")
+J = [board("A", 0, 10, 48, 48), board("B", 0, 0, 22, 10),       # A + B would be an L
+     board("C", 48, 10, 96, 48), board("D", 48, 0, 96, 10)]     # C and D butt each other on y=10
+pairs = [(J[i]["mark"], J[j]["mark"]) for (i, j, e) in candidates(J, [])]
+check("A + B not merged: C / D butt on the same line", ("A", "B") not in pairs, str(pairs))
+
 print("\n{} / {} passed".format(sum(fails), len(fails)))
 raise SystemExit(0 if all(fails) else 1)

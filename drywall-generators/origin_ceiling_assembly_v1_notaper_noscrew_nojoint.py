@@ -556,6 +556,104 @@ def merge_small_pieces(pieces, min_safe_ft):
     return [tuple(p) for p in pcs]
 
 
+END_COURSE_MIN_FT = 16.0 / 12.0     # an end course against a wall is at least one furring bay
+
+
+def course_bands(lo, hi, start, width, min_piece, min_end=END_COURSE_MIN_FT):
+    """The 4 ft courses across [lo, hi] stepping from start: [(c0, c1, row), ...], row numbered as
+    the generator always has (every step counts, so the odd-row stagger is unchanged).
+
+    The last course is whatever is left at the far wall, and one thinner than min_piece used to be
+    skipped outright - no board, a gap along the whole wall. Live on 2C ceiling C001 (user report
+    2026-09-28): 144.87in deep, courses of 48 + 48 + 48 left 0.87in at wall 020. Such a course now
+    takes min_end from the one before it (48 + 48 + 32.87 + 16), the one-bay rule
+    ceiling_end_joints.py applies along a course. If that would leave the course before it under
+    min_end too, the two are left as they were."""
+    bands = []
+    cc = start
+    row = 0
+    while cc < hi - 1e-4:
+        c0 = max(lo, cc)
+        c1 = min(hi, cc + width)
+        cc += width
+        row += 1
+        bands.append([c0, c1, row])
+    if len(bands) >= 2:
+        last, prev = bands[-1], bands[-2]
+        if 1e-6 < last[1] - last[0] < min_piece:
+            nb = last[1] - min_end
+            if nb - prev[0] >= min_end - 1e-6:
+                prev[1] = last[0] = nb
+    return [tuple(b) for b in bands]
+
+
+def absorb_thin_pieces(pieces, min_w, min_h):
+    """Hand a strip too thin to emit (under min_w wide or min_h tall) to the pieces lying along its
+    long edge, instead of letting the emit loop drop it and leave a hole.
+
+    merge_small_pieces() only fuses a sliver into a neighbour with the SAME full range, so it keeps
+    the result rectangular. That fails when the pieces beside the sliver were themselves split -
+    live on C9 ceiling 394087 (user report 2026-09-28): the corner of walls 017/042 sat 2.5in past a
+    sheet edge, the cell was cut at the wall's end line into a 48in x 2.5in strip, the part beyond
+    was cut again at the wall face into 23in + 25in pieces, no neighbour matched the strip's 48in,
+    and the MIN_PIECE check dropped it - an uncovered 2.5in gap under the furring.
+
+    Here each neighbour whose own range lies within the strip's long edge is stretched across the
+    strip for that range (it stays a rectangle, and stays inside its cell, so never grows past a
+    sheet). Whatever part of the strip no neighbour reaches is left as it was."""
+    pcs = [list(p) for p in pieces]
+    tol = 1e-4
+    i = 0
+    while i < len(pcs):
+        x0, y0, x1, y1 = pcs[i]
+        thin_y = (y1 - y0) < min_h
+        thin_x = (x1 - x0) < min_w
+        if not (thin_x or thin_y):
+            i += 1
+            continue
+        # along = the strip's long axis; its thin axis is spanned by the stretched neighbours
+        if thin_y and not (thin_x and (x1 - x0) < (y1 - y0)):
+            lo, hi, a0i, a1i, n0i, n1i = x0, x1, 0, 2, 1, 3
+        else:
+            lo, hi, a0i, a1i, n0i, n1i = y0, y1, 1, 3, 0, 2
+        s0, s1 = pcs[i][n0i], pcs[i][n1i]
+        covered = []
+        for j, o in enumerate(pcs):
+            if j == i or o[a0i] < lo - tol or o[a1i] > hi + tol:
+                continue
+            if any(o[a0i] < c1 - tol and o[a1i] > c0 + tol for (c0, c1) in covered):
+                continue
+            if abs(o[n1i] - s0) < tol:
+                o[n1i] = s1                  # neighbour on the low side: stretch it up over the strip
+            elif abs(o[n0i] - s1) < tol:
+                o[n0i] = s0                  # neighbour on the high side: stretch it down
+            else:
+                continue
+            covered.append((o[a0i], o[a1i]))
+        if not covered:
+            i += 1
+            continue
+        rest = [(lo, hi)]
+        for (c0, c1) in covered:
+            nxt = []
+            for (r0, r1) in rest:
+                if c1 <= r0 + tol or c0 >= r1 - tol:
+                    nxt.append((r0, r1))
+                    continue
+                if c0 > r0 + tol:
+                    nxt.append((r0, c0))
+                if c1 < r1 - tol:
+                    nxt.append((c1, r1))
+            rest = nxt
+        del pcs[i]
+        for (r0, r1) in rest:
+            p = [0.0, 0.0, 0.0, 0.0]
+            p[a0i], p[a1i], p[n0i], p[n1i] = r0, r1, s0, s1
+            pcs.append(p)
+        i = 0                                # ranges changed; rescan from the start
+    return [tuple(p) for p in pcs]
+
+
 def rect_area(r):
     return max(0.0, r[2] - r[0]) * max(0.0, r[3] - r[1])
 
@@ -2080,13 +2178,9 @@ def emit_drywall(ceiling_id, host_tag, z_bottom, outer, holes, fixtures, boundar
         cstart = course_lo + v_off
         while cstart > course_lo:
             cstart -= PANEL_WIDTH_FT
-        row = 0
-        cc = cstart
-        while cc < course_hi - 1e-4:
-            cc0 = max(course_lo, cc)
-            cc1 = min(course_hi, cc + PANEL_WIDTH_FT)
-            cc += PANEL_WIDTH_FT
-            row += 1
+        # (course_bands: a last course too thin to board takes one bay from the course before it)
+        for (cc0, cc1, row) in course_bands(course_lo, course_hi, cstart, PANEL_WIDTH_FT,
+                                            MIN_PIECE_HEIGHT_FT):
             if (cc1 - cc0) < MIN_PIECE_HEIGHT_FT:
                 continue
             full_course = abs((cc1 - cc0) - PANEL_WIDTH_FT) < 0.02
@@ -2158,6 +2252,9 @@ def emit_drywall(ceiling_id, host_tag, z_bottom, outer, holes, fixtures, boundar
                 # it) can still inject a spurious internal seam above - fuse any resulting
                 # confetti-sized piece into a same-range neighbor before emitting.
                 pieces = merge_small_pieces(pieces, MIN_SAFE_SEGMENT_FT)
+                # ...and a strip still too thin to emit goes to the pieces along its long edge,
+                # rather than being dropped below and leaving a hole.
+                pieces = absorb_thin_pieces(pieces, MIN_PIECE_WIDTH_FT, MIN_PIECE_HEIGHT_FT)
                 for (px0, py0, px1, py1) in pieces:
                     g = CODE_GAP_FT / 2.0
                     sx0 = px0 + g

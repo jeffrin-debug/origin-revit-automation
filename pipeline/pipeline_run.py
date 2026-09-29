@@ -197,6 +197,12 @@ for path in FILES:
             prep = stage2["run_on_document"](nd, manifest_dir=mdir)
             detail["panels"] = prep
             row["counts"] = prep.get("counts")
+            # Uncovered ceiling area (ceiling_coverage_check.py). A warning, not a failure: the file
+            # is still saved, and menu 5 (review) shows the gaps before you approve it.
+            cov = prep.get("ceiling_coverage") or {}
+            if cov:
+                row["ceiling_gaps"] = (cov.get("gap_count", 0) + len(cov.get("unboarded") or [])
+                                       if not cov.get("error") else "check failed")
 
             gen_fatals = [g for g, v in (prep.get("generators") or {}).items()
                           if isinstance(v, dict) and "FATAL" in v]

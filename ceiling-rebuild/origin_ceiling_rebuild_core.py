@@ -1120,6 +1120,20 @@ def match_ceilings_to_regions(regions, ceilings, cfg=None):
             elif n > 0:
                 partial.append(r)
 
+        # A narrow drop inside a big room can dodge all of that room's probes (C9: a 25" x 10'
+        # bulkhead strip in a 377 sf room - the 9 probes landed ~80" apart, none in the strip)
+        # and be deleted as a stray. Before calling it one, look the other way: probe the
+        # CEILING and see which regions its own points fall in.
+        if not full and not partial:
+            c_probes = probe_points(c["outer"], c.get("holes"))
+            for r in regions:
+                if not rects_overlap(c["bbox"], r["bbox"]):
+                    continue
+                if any(point_in_region(px, py, r["outer"], r["holes"]) for (px, py) in c_probes):
+                    partial.append(r)
+            if partial:
+                c["matched_by_ceiling_probes"] = True
+
         c["spans_room_ids"] = [r["room_id"] for r in full]
         c["partial_room_ids"] = [r["room_id"] for r in partial]
 
