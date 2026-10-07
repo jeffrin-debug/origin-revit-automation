@@ -91,6 +91,11 @@ DETECT_SOFFIT_WALLS = True
 # as long as the pair still fits one 4x8 sheet - see ceiling_l_merge.py. False keeps the split.
 CEILING_L_MERGE = True
 
+# Every ceiling butt joint lands on a furring channel: after the L-merge, a joint the generator cut
+# off the channel grid (wall-end splits, C9 C007 y=423.83) moves to the nearest channel, and after
+# every run that touches ceilings all joints are checked (read-only) - see ceiling_joints_on_furring.py.
+CEILING_JOINTS_ON_FURRING = True
+
 # After every run that touches ceilings, sample each ceiling and report any area no board covers
 # (read-only) - see ceiling_coverage_check.py. The net under every "piece too small, dropped" path.
 CEILING_COVERAGE_CHECK = True
@@ -441,6 +446,19 @@ def run_on_document(doc, manifest_dir=None, only=None):
             except Exception:
                 report["ceiling_l_merge"] = {"error": traceback.format_exc()[-800:]}
 
+        if label == "ceilings" and CEILING_JOINTS_ON_FURRING and "FATAL" not in entry:
+            try:
+                jf = {"__name__": "ceiling_joints_on_furring"}
+                jfp = os.path.join(ROOT, "ceiling_joints_on_furring.py")
+                jf["__file__"] = jfp
+                exec(compile(open(jfp).read(), jfp, "exec"), jf)
+                rep = jf["run"](doc, os.path.join(REPO, CEILING_MANIFEST))
+                report["ceiling_joints_on_furring"] = {
+                    "moved": rep.get("moved", []), "left": rep.get("left", [])[:20],
+                    "failed": rep.get("failed", [])[:20]}
+            except Exception:
+                report["ceiling_joints_on_furring"] = {"error": traceback.format_exc()[-800:]}
+
         if label == "walls" and DETECT_SOFFIT_WALLS and "FATAL" not in entry:
             try:
                 sd = {"__name__": "soffit_detect"}
@@ -477,6 +495,16 @@ def run_on_document(doc, manifest_dir=None, only=None):
             report["ceiling_coverage"] = cc["run"](doc)
         except Exception:
             report["ceiling_coverage"] = {"ok": False, "error": traceback.format_exc()[-800:]}
+
+    if CEILING_JOINTS_ON_FURRING and targets["ceilings"] and any(l in CEILING_COVERAGE_STEPS for l in ran):
+        try:
+            jc = {"__name__": "ceiling_joints_on_furring"}
+            jcp = os.path.join(ROOT, "ceiling_joints_on_furring.py")
+            jc["__file__"] = jcp
+            exec(compile(open(jcp).read(), jcp, "exec"), jc)
+            report["ceiling_joint_check"] = jc["check"](doc)
+        except Exception:
+            report["ceiling_joint_check"] = {"ok": False, "error": traceback.format_exc()[-800:]}
 
     if manifest_dir:
         copied = []

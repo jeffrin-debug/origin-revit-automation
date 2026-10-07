@@ -203,6 +203,10 @@ for path in FILES:
             if cov:
                 row["ceiling_gaps"] = (cov.get("gap_count", 0) + len(cov.get("unboarded") or [])
                                        if not cov.get("error") else "check failed")
+            jc = prep.get("ceiling_joint_check") or {}
+            if jc:
+                row["ceiling_joints_off_framing"] = (len(jc.get("off_channel") or [])
+                                                     if not jc.get("error") else "check failed")
 
             gen_fatals = [g for g, v in (prep.get("generators") or {}).items()
                           if isinstance(v, dict) and "FATAL" in v]

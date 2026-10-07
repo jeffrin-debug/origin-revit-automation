@@ -281,6 +281,30 @@ function Show-Step($name, $row) {
                 }
             }
         }
+        # Every ceiling butt joint against the furring in the model - see ceiling_joints_on_furring.py.
+        foreach ($m in @($row.ceiling_joints_on_furring.moved)) {
+            if ($null -ne $m) {
+                Write-Host ("             ceiling joint {0}/{1} moved {2} -> {3} in (onto a channel)" -f `
+                        $m.a, $m.b, $m.at_in, $m.moved_to_in) -ForegroundColor DarkGray
+            }
+        }
+        $jc = $row.ceiling_joint_check
+        if ($null -ne $jc) {
+            if ($jc.error) {
+                Write-Host ("             ceiling joint check FAILED to run - see the detail report") -ForegroundColor Yellow
+            } elseif ($jc.ok) {
+                Write-Host ("             ceiling joints: all {0} on a furring channel" -f $jc.joints) -ForegroundColor Green
+            } else {
+                Write-Host ("             ! CEILING JOINTS OFF FRAMING: {0} of {1} - check them before saving" -f `
+                        @($jc.off_channel).Count, $jc.joints) -ForegroundColor Yellow
+                foreach ($j in @($jc.off_channel)) {
+                    if ($null -ne $j) {
+                        Write-Host ("               {0} / {1}: joint at {2} = {3} in, {4} in from the channel at {5}" -f `
+                                $j.a, $j.b, $j.axis, $j.at_in, $j.off_by_in, $j.nearest_channel_in) -ForegroundColor Yellow
+                    }
+                }
+            }
+        }
     }
     if ($null -ne $o.panels_only_view) {
         $pv = $o.panels_only_view

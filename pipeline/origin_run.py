@@ -221,6 +221,10 @@ else:
                 "ceiling_end_joints": prep.get("ceiling_end_joints"),
                 "soffit_walls": prep.get("soffit_walls"),
                 "ceiling_l_merge": prep.get("ceiling_l_merge"),
+                "ceiling_joints_on_furring": prep.get("ceiling_joints_on_furring"),
+                "ceiling_joint_check": dict((k, v[:8] if isinstance(v, list) else v)
+                                            for k, v in (prep.get("ceiling_joint_check") or {}).items())
+                                       or None,
                 "orphan_ceiling_assemblies": prep.get("orphan_ceiling_assemblies"),
                 "ceiling_coverage": dict((k, v[:8] if isinstance(v, list) else v)
                                          for k, v in (prep.get("ceiling_coverage") or {}).items())

@@ -302,6 +302,14 @@ function Do-Review {
                         }
                     }
                 }
+                # ceiling butt joints off the furring - ceiling_joints_on_furring.py
+                $jc = $d.panels.ceiling_joint_check
+                if ($null -ne $jc -and -not $jc.ok) {
+                    Write-Host ("      ! CEILING JOINTS OFF FRAMING: {0} - look before approving" -f @($jc.off_channel).Count) -ForegroundColor Yellow
+                    foreach ($j in @($jc.off_channel | Select-Object -First 5)) {
+                        if ($j) { Write-Host ("        {0} / {1}: {2} = {3} in, {4} in off" -f $j.a, $j.b, $j.axis, $j.at_in, $j.off_by_in) -ForegroundColor Yellow }
+                    }
+                }
             } catch { }
         }
         Write-Host '      [O] open in Revit   [A] approve   [R] reject   [S] skip   [Q] stop reviewing'
