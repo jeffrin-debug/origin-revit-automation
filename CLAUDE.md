@@ -54,6 +54,8 @@ pipeline/            stage 2 (panels) + the CLI + every rule module + diagnostic
 ceiling-rebuild/     stage 1: split the blanket ceiling into one ceiling per room
 drywall-generators/  the five generators (walls, ceilings, soffits, columns, beams), outlet
                      families, Dynamo graphs, and the origin_bridge_* probes used to build them
+layout-bridge/       separate bridge for building rooms live from drawings (sim-ready walls);
+                     room data stays local - see layout-bridge/README.md
 docs/                ORIGIN_COMMANDS.md - the user-facing runbook
 claude/              this knowledge base
 ```

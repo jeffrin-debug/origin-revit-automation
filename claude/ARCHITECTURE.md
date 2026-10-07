@@ -60,8 +60,13 @@ then runs its post-passes. **Order matters** — later steps measure against ear
 | 14 | No joint within 16 in of a wall (joint moved by whole furring bays) | `ceiling_end_joints` | patch |
 | **ceilings** — post-pass |
 | 15 | Rejoin boards split with no wall on the seam, L-shapes allowed, one 4×8 sheet | `ceiling_l_merge` | post-pass |
+| 15a | Butt joints cut off the furring grid move onto the nearest channel | `ceiling_joints_on_furring.run` | post-pass |
 | **soffits, columns, beams** | generators run as-is (columns wrap each exposed face and trim wall / ceiling pieces out of the wrap) |
 | **after all steps** | Every ceiling sampled on a 1 in grid for unboarded area (read-only) | `ceiling_coverage_check` | check |
+| | Every ceiling butt joint is on a furring channel (read-only) | `ceiling_joints_on_furring.check` | check |
+
+Note the ceiling fixes (15, 15a) run **before** columns and beams cut the ceiling boards again,
+so slivers or off-channel joints those cuts create are only reported by the final checks.
 
 Patch modules expose `apply_to_source(src) -> (src, info)` and often `collect(ns, info)` to pull
 what they recorded out of the generator's namespace (e.g. `_ORIGIN_END_JOINTS`). Post-pass
@@ -89,3 +94,47 @@ hard-coded to the machine it was written on; stage 2 rewrites it to the folder t
 Post-passes that remove or reshape boards update it (`infill_merge`, `ceiling_l_merge`,
 `soffit_detect`). Note the wall generator's own post-passes (stud trimming) do NOT update board
 x-ranges in the manifest — trust live geometry over manifest extents.
+
+## Contracts between stages (2026-10-07 review)
+
+There are no shared modules: stages talk through text.
+
+- **Comments strings** on every DirectShape are the internal API — cleanup, post-passes, the
+  column trim and other generators parse them. `CEILING=C<eid>` is matched as a substring in the
+  ceiling merges, so `C123` also matches `C1234`.
+- **Source-string patches** anchor on exact generator lines; a reformatted line makes the patch
+  report `skipped` and the run carries on unpatched. Treat anchor lines as frozen until the
+  patches become real parameters.
+- **Marks** are written onto the user's own elements: walls `NNN`, ceilings `C###`/`S###`,
+  columns `K###`, beams `B###` (columns/beams in collector order, so they renumber when
+  elements are added).
+- **Manifests** are written into the drywall repo folder, so each env overwrites the last; the
+  post-passes `wall_end_joint_fix` and `wall_narrow_merge` do not update them.
+- `ORIGIN_TARGET_DOC` is injected, but the generators' selection fallback still reads the UI
+  document's selection — stage 2 always passes `IN[0]` to avoid it.
+
+## What runs against elements the pipeline did not create
+
+| Step | Effect |
+|---|---|
+| Wall generator `REMOVE_MANUAL_CUTOUTS = True` (`get_opening_rects`) | Deletes every wall insert that is not a Door / Window / embedded wall — plain wall Openings, void and face-based families |
+| Stage 1 classification | Keeps an authored ceiling only if it hangs > 50 mm below its room's wall tops, or covers the room with matching NET area — a ceiling with holes can never match; the recut has no holes |
+| Stage 1 delete | Revit cascades to sketches, Openings and hosted fixtures; logged as `collateral` ids, never checked |
+| `soffit_detect.raise_to_ceiling` | Changes authored walls' base / top offsets (up to 2 ft) |
+| Column generator `cut_hosts` | Trims / deletes wall- and ceiling-generator pieces; not undone if the column moves |
+| `ensure_export_view` | Un-hides every element hidden in the ORIGIN Assembly view |
+| Batch `pipeline_run.py` | Auto-answers every Revit dialog with OK |
+
+## Code structure and refactor seams
+
+- One file per generator so it can paste into a Dynamo node; ~35 helpers are copy-pasted 3–5
+  times across them (Dynamo plumbing, solid builders, `create_directshape`, tags/cleanup,
+  styles, `ensure_export_view`), and the copies have drifted. `origin_soffit_assembly_v1.py`
+  is a 2.4k-line fork of the ceiling generator, behind it, sharing its APP_ID.
+- The wall generator: ~116 functions, no classes, positional argument lists of up to 23, a
+  545-line main. Layout maths (junctions, framing, courses, cells) is pure apart from XYZ.
+- Seams, in order of safety: a shared `origin_core` (dyn / tags / geom / ds+styles+view /
+  layout / manifest) loaded via `sys.path`; each generator split into model read → pure layout
+  specs → emission; patches turned into parameters; an explicit preservation policy for
+  openings, authored ceilings, marks and hosted fixtures; soffits as a ceiling mode; the column
+  trim moved into a pipeline-owned post-pass.

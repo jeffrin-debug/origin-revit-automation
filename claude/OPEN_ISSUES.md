@@ -1,6 +1,34 @@
 # Open issues and known limits
 
-As of 2026-09-29 (1F, then C9). Each has where to look.
+As of 2026-09-29 (1F, then C9); 2026-10-07 architecture review added below. Each has where to look.
+
+## Found in the 2026-10-07 architecture review
+
+First hit on a hand-built sim-ready room (`layout-bridge/`), run with `origin all`:
+
+- **Wall generator deletes plain wall Openings** — `REMOVE_MANUAL_CUTOUTS = True`
+  (`get_opening_rects`). A 3–7 ft window band cut as an Opening was deleted and the wall boarded
+  full height. Candidate: treat Openings as openings instead of deleting them.
+- **Stage 1 deleted an authored ceiling and dropped its holes** — the ceiling sat at the wall
+  tops (drop 0 < 50 mm, so "top layer") and its three 2×2 diffuser holes made the net area 12 sf
+  short of the room (tolerance 1.5 sf). The recut has no holes; 67 cascaded elements (sketches,
+  Openings) were only logged as `collateral`. Candidates: compare outer area / treat probes in
+  holes as covered, carry holes into the recut, fail on collateral Openings / FamilyInstances,
+  provenance-based "authored" rule.
+- **Stage 1 leaks SketchPlanes** (`seal_perimeter`, doorway closing) into committed models, and
+  matching is 2D with no level filter (stacked storeys can turn one ceiling into a "blanket").
+- **Soffit step undoes the ceiling fixes** — `origin_soffit_assembly_v1.py` re-collects
+  soffit-named ceilings, deletes the ceiling generator's output (shared APP_ID) and rebuilds with
+  the pre-08-06 logic (parallel furring, no curtain exclusion, no merges).
+- **Silent patch skips** — any anchor-text change in a generator turns a patch into `skipped`
+  and the run still succeeds; fix-pass exceptions do not fail the run either.
+- **Ceiling board outside its ceiling** — per-room path emits whole boards "fully inside the
+  room" without clipping to the ceiling outline (`board_fully_inside`), so a room under two
+  ceilings at different heights gets sheets outside the ceiling.
+- **Hardcoded env patch** in the wall generator (walls `008` / `010`, ~L5213) and C9 one-off
+  scripts in `pipeline/` keyed to marks / element ids.
+- **Legacy ceiling generators** (`origin_ceiling_assembly_v1.py`, `_noscrews.py`) share the
+  live APP_ID; running an old Dynamo graph silently replaces live output.
 
 ## Defects
 

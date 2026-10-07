@@ -1,0 +1,12 @@
+# Runtime and output - never committed
+bridge/
+renders/
+models/
+*.rvt
+*.png
+# Room builds hold dimensions measured from client drawings - kept on the build machine only
+scripts/layout_*_data.py
+scripts/room_*.py
+scripts/report_*.py
+scripts/split_*.py
+scripts/*.json
