@@ -57,6 +57,22 @@ details ul{margin:4px 0;padding-left:18px;font-size:.82rem;color:var(--muted);ma
 .toast.okmsg{background:var(--ok-bg);color:var(--ok);border-color:var(--ok)}
 .help{font-size:.85rem;color:var(--muted)}
 .scroll{overflow-x:auto}
+.steps{display:grid;gap:10px;margin-top:6px}
+.step{display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:start;padding:10px 0;border-top:1px solid var(--line)}
+.step:first-child{border-top:none}
+.light{width:22px;height:22px;border-radius:50%;background:var(--chip);border:2px solid var(--line);margin-top:2px}
+.light.ok{background:var(--ok);border-color:var(--ok)} .light.bad{background:var(--bad);border-color:var(--bad)} .light.wait{background:var(--warn);border-color:var(--warn)}
+.step > div > b{display:block} .step .help ol{margin:6px 0 0;padding-left:20px} .step .help li{margin:2px 0}
+.step .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+code.path{font:12px Consolas,monospace;word-break:break-all}
+#setupCard.compact .steps{display:none}
+#setupCard .toggle{float:right}
+.chips-row{display:flex;gap:4px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:.8rem;color:var(--muted);cursor:pointer;user-select:none;white-space:nowrap}
+.chip input{margin:0;width:13px;height:13px}
+.chip.on{border-color:var(--accent);color:var(--ink);background:var(--chip)}
+.presets{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px;font-size:.9rem}
+.presets span{color:var(--muted)}
 .demo{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn);border-radius:8px;padding:10px 14px;margin-top:14px;font-size:.9rem}
 </style>
 </head>
@@ -72,17 +88,50 @@ details ul{margin:4px 0;padding-left:18px;font-size:.82rem;color:var(--muted);ma
     made-up layouts so you can click through choose → run → review → approve → promote. To panelise real layouts, run
     <code>pipeline\origin_web.cmd</code> on a PC with Revit 2026 and the ORIGIN bridge open.</div>
 
+  <section class="card" id="setupCard">
+    <button class="link toggle" id="setupToggle" hidden>show setup</button>
+    <h2 id="setupTitle">0 · Get connected</h2>
+    <p class="sub" id="setupSub">Three green lights and you are ready.</p>
+    <div class="steps">
+      <div class="step"><span class="light" id="l1"></span>
+        <div><b>Revit 2026</b><div class="help" id="t1"></div></div>
+        <div class="acts" id="a1"></div></div>
+      <div class="step"><span class="light" id="l2"></span>
+        <div><b>Connection to Revit (Dynamo bridge)</b><div class="help" id="t2"></div></div>
+        <div class="acts" id="a2"></div></div>
+      <div class="step"><span class="light" id="l3"></span>
+        <div><b>Output folder</b><div class="help" id="t3"></div></div>
+        <div class="acts" id="a3"></div></div>
+    </div>
+  </section>
+
+  <section class="card" id="openCard">
+    <h2>Run on the model open in Revit</h2>
+    <p class="sub" id="openSub">Connect Revit first.</p>
+    <div id="openSteps"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
+      <button class="primary" id="runOpen" disabled>Run on open model</button>
+      <span class="help">Changes the open model directly and saves nothing - look at it in Revit, then save it yourself (File → Save As) if you want to keep it.</span>
+    </div>
+  </section>
+
   <section class="card" id="runCard" hidden>
     <h2 id="runTitle">Running</h2>
     <div id="runBody"></div>
   </section>
 
   <section class="card">
-    <h2>1 · Choose layouts</h2>
-    <p class="sub">Tick the layouts to panelise. The original files are never changed; results are saved as copies.</p>
+    <h2>1 · Run on layout files (batch)</h2>
+    <p class="sub">Tick the layouts and choose what runs on each one. They run one after another; the original files are never changed - results are saved as copies.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button id="addFolder">+ Add folder…</button>
       <button id="refresh">Refresh</button>
+    </div>
+    <div class="presets"><span>Set the ticked layouts to:</span>
+      <button data-preset="full">Everything</button>
+      <button data-preset="split">Ceiling split only</button>
+      <button data-preset="walls">Walls only</button>
+      <button data-preset="panels">All panels, no split</button>
     </div>
     <div id="folders"></div>
   </section>
@@ -109,8 +158,7 @@ details ul{margin:4px 0;padding-left:18px;font-size:.82rem;color:var(--muted);ma
   <div class="in">
     <span id="selCount"><b>0</b> selected</span>
     <span class="note" id="runNote">Revit must be open with the ORIGIN bridge graph running in Dynamo (Periodic).</span>
-    <button id="runCeil">Ceilings only</button>
-    <button class="primary" id="runAll">Panelise selected</button>
+    <button class="primary" id="runAll">Run selected layouts</button>
   </div>
 </div>
 
@@ -144,6 +192,33 @@ function tagFor(v){
   return `<span class="tag ${cls}">${esc(v)}</span>`;
 }
 
+// ------------------------------------------------------------------ steps
+// What runs on each layout: the ceiling split and/or any of the five panel generators.
+const STEPS = [["ceiling","Split ceilings"],["walls","Walls"],["ceilings","Ceilings"],["soffits","Soffits"],["columns","Columns"],["beams","Beams"]];
+const PRESETS = {full:["ceiling","walls","ceilings","soffits","columns","beams"], split:["ceiling"], walls:["walls"],
+                 panels:["walls","ceilings","soffits","columns","beams"]};
+const PRESET_NAMES = {full:"everything", split:"ceiling split only", walls:"walls only", panels:"all panels, no split"};
+const ORDERED = ks => STEPS.map(s => s[0]).filter(k => ks.includes(k));
+function loadStore(k, d){ try{ return JSON.parse(localStorage.getItem(k)) || d; }catch(e){ return d; } }
+function saveStore(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+const stepsFor = new Map(Object.entries(loadStore("origin.stepsFor", {})));
+let openSteps = loadStore("origin.openSteps", PRESETS.full);
+const getSteps = p => stepsFor.get(p) || PRESETS.full;
+function setSteps(p, v){ stepsFor.set(p, ORDERED(v)); saveStore("origin.stepsFor", Object.fromEntries(stepsFor)); }
+function stepChips(attr, key, steps){
+  return `<span class="chips-row">${STEPS.map(([k,l]) => `<label class="chip ${steps.includes(k) ? "on" : ""}"><input type="checkbox" ${attr}="${esc(key)}" data-step="${k}" ${steps.includes(k) ? "checked" : ""}>${l}</label>`).join("")}</span>`;
+}
+function describe(steps){
+  const hit = Object.entries(PRESETS).find(([n, v]) => v.join() === ORDERED(steps).join());
+  return hit ? PRESET_NAMES[hit[0]] : ORDERED(steps).join(" + ");
+}
+document.querySelector(".presets").addEventListener("click", e => {
+  const p = e.target.dataset.preset; if(!p) return;
+  if(!selected.size){ toast("Tick some layouts first."); return; }
+  selected.forEach(path => setSteps(path, PRESETS[p]));
+  loadLayouts(); toast(`${selected.size} layout(s) set to ${PRESET_NAMES[p]}.`, true);
+});
+
 // ------------------------------------------------------------------ layouts
 async function loadLayouts(){
   const groups = await api("/api/layouts");
@@ -155,7 +230,7 @@ async function loadLayouts(){
         <td><input type="checkbox" data-path="${esc(f.path)}" ${selected.has(f.path) ? "checked" : ""} ${f.too_big ? "disabled title='Over 50 MB - skipped like the batch does'" : ""}></td>
         <td>${esc(f.name)}${f.too_big ? ' <span class="tag warn">over 50 MB</span>' : ""}</td>
         <td class="num">${f.mb} MB</td>
-        <td class="num">${esc(f.modified)}</td>
+        <td>${f.too_big ? "" : stepChips("data-spath", f.path, getSteps(f.path))}</td>
         <td>${tagFor(f.ceiling)}</td><td>${tagFor(f.panels)}</td><td>${tagFor(f.review)}</td>
       </tr>`).join("");
     return `<div class="folder">
@@ -166,7 +241,7 @@ async function loadLayouts(){
         <button class="link" data-remove="${esc(g.folder)}">remove</button>
       </div>
       ${!g.exists ? '<p class="empty">Folder not found.</p>' : !g.files.length ? '<p class="empty">No .rvt layouts in this folder.</p>' :
-      `<div class="scroll"><table data-group="${gi}"><thead><tr><th></th><th>Layout</th><th>Size</th><th>Modified</th><th>Ceilings</th><th>Panels</th><th>Review</th></tr></thead><tbody>${rows}</tbody></table></div>`}
+      `<div class="scroll"><table data-group="${gi}"><thead><tr><th></th><th>Layout</th><th>Size</th><th>What to run</th><th>Ceilings</th><th>Panels</th><th>Review</th></tr></thead><tbody>${rows}</tbody></table></div>`}
     </div>`;
   }).join("");
   updateSel();
@@ -174,6 +249,10 @@ async function loadLayouts(){
 $("#folders").addEventListener("change", e => {
   const cb = e.target;
   if(cb.dataset.path){ cb.checked ? selected.add(cb.dataset.path) : selected.delete(cb.dataset.path); }
+  if(cb.dataset.spath){
+    const cur = new Set(getSteps(cb.dataset.spath)); cb.checked ? cur.add(cb.dataset.step) : cur.delete(cb.dataset.step);
+    setSteps(cb.dataset.spath, [...cur]); cb.parentElement.classList.toggle("on", cb.checked);
+  }
   if(cb.dataset.all !== undefined){
     document.querySelectorAll(`table[data-group="${cb.dataset.all}"] input[data-path]:not(:disabled)`).forEach(x => {
       x.checked = cb.checked; cb.checked ? selected.add(x.dataset.path) : selected.delete(x.dataset.path);
@@ -198,19 +277,43 @@ function updateSel(){
   $("#selCount").innerHTML = `<b>${selected.size}</b> selected`;
   const busy = STATE && STATE.job && STATE.job.state === "running";
   const alive = STATE && STATE.bridge.alive;
-  $("#runAll").disabled = $("#runCeil").disabled = !selected.size || busy || !alive;
+  $("#runAll").disabled = !selected.size || busy || !alive;
+  $("#runOpen").disabled = busy || !alive || !openSteps.length;
 }
 
 // ------------------------------------------------------------------ run
-async function run(stages){
-  const files = [...selected];
-  const what = stages.includes("panels") ? "split ceilings and panelise" : "split ceilings in";
-  if(!confirm(`${what} ${files.length} layout(s)?\n\nRevit will be busy until it finishes (roughly 1-10 min per layout). Originals are not changed.`)) return;
-  try{ await api("/api/run", {files, stages}); selected.clear(); loadLayouts(); poll(); }
+async function run(){
+  const files = [...selected].map(p => ({path:p, steps:getSteps(p)}));
+  const empty = files.filter(f => !f.steps.length);
+  if(empty.length){ toast(`${empty.length} ticked layout(s) have nothing to run - tick at least one step.`); return; }
+  const lines = files.map(f => "  " + f.path.split("\\").pop() + " - " + describe(f.steps)).join("\n");
+  if(!confirm(`Run ${files.length} layout(s)?\n\n${lines}\n\nRevit will be busy until it finishes. Originals are not changed.`)) return;
+  try{ await api("/api/run", {files}); selected.clear(); loadLayouts(); poll(); }
   catch(err){ toast(err.message); }
 }
-$("#runAll").onclick = () => run(["ceiling","panels"]);
-$("#runCeil").onclick = () => run(["ceiling"]);
+$("#runAll").onclick = run;
+
+// ------------------------------------------------------------------ open model
+function renderOpen(st){
+  const b = st.bridge || {};
+  const host = /^ORIGIN_host/i.test(b.doc || "");
+  $("#openSub").innerHTML = !b.alive ? "Connect Revit first (step 0)." : b.busy ? "Revit is busy." :
+    host ? `Revit has only the empty ORIGIN host model open. Open your layout in Revit first (File → Open), then come back here.`
+         : `Open model: <b>${esc(b.doc)}</b>. Choose what to run on it:`;
+  if(!$("#openSteps").innerHTML) $("#openSteps").innerHTML = stepChips("data-ostep", "open", openSteps);
+}
+$("#openSteps").addEventListener("change", e => {
+  const cb = e.target; if(!cb.dataset.step) return;
+  const cur = new Set(openSteps); cb.checked ? cur.add(cb.dataset.step) : cur.delete(cb.dataset.step);
+  openSteps = ORDERED([...cur]); saveStore("origin.openSteps", openSteps);
+  cb.parentElement.classList.toggle("on", cb.checked); updateSel();
+});
+$("#runOpen").onclick = async () => {
+  const doc = (STATE && STATE.bridge.doc) || "the open model";
+  if(/^ORIGIN_host/i.test(doc)){ toast("Open your layout in Revit first - only the empty host model is open."); return; }
+  if(!confirm(`Run ${describe(openSteps)} on "${doc}"?\n\nThis changes the model open in Revit and saves nothing. Save it yourself afterwards if you want to keep it.`)) return;
+  try{ await api("/api/run-open", {steps:openSteps}); poll(); }catch(err){ toast(err.message); }
+};
 
 function renderJob(j){
   const card = $("#runCard");
@@ -222,6 +325,12 @@ function renderJob(j){
     const doneN = (p.done || []).length;
     const pct = Math.round(100 * doneN / total);
     $("#runTitle").textContent = "Running in Revit…";
+    if(j.kind === "open"){
+      $("#runBody").innerHTML = `<p>Running <b>${esc(describe(j.steps || []))}</b> on the open model <b>${esc(j.doc || "")}</b>
+        <span class="help"> · ${Math.floor(j.elapsed/60)}m ${j.elapsed%60}s elapsed</span></p>
+        <p class="help">Revit will look frozen while it works. Don’t close it or click in it until this finishes.</p>`;
+      return;
+    }
     $("#runBody").innerHTML = `
       <div class="bar"><i style="width:${Math.max(pct, 3)}%"></i></div>
       <p>${p.file ? `Layout <b>${p.index} of ${total}</b>: <b>${esc(p.file)}</b> - ${esc(p.stage)}` : "Waiting for Revit to pick up the job…"}
@@ -231,11 +340,22 @@ function renderJob(j){
     return;
   }
   const dismiss = '<p><button id="dismiss">Close</button></p>';
-  if(j.state === "done"){
+  if(j.state === "done" && j.kind === "open"){
+    const r = j.result || {}, c = r.ceiling, p = r.panels;
+    const gens = p && p.generators ? Object.entries(p.generators).map(([g, v]) =>
+      `<li><b>${esc(g)}</b>: ${v.boards_created ?? "-"} boards${(v.warnings||[]).length ? `, ${v.warnings.length} warning(s)` : ""}${v.FATAL ? ' <span class="tag bad">crashed</span>' : ""}</li>`).join("") : "";
+    $("#runTitle").textContent = r.ok ? `Finished on ${r.doc || "the open model"} - OK` : `Finished on ${r.doc || "the open model"} - with problems`;
+    $("#runBody").innerHTML = `
+      ${c ? `<p>Ceiling split: ${tagFor(c.ok ? "ok" : "failed - rolled back")} ${(c.fail_reasons||[]).length ? `<ul class="flags">${c.fail_reasons.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</p>` : ""}
+      ${p ? `<p>Panels: ${tagFor(p.ok ? "ok" : (p.skipped ? "skipped" : "failed"))} ${p.skipped ? `<span class="help">${esc(p.skipped)}</span>` : ""}</p><ul class="help">${gens}</ul>` : ""}
+      ${(p && p.ceiling_coverage && p.ceiling_coverage.ok === false) ? `<p class="flags">Ceiling gaps found - look before saving.</p>` : ""}
+      ${r.error || (p && p.error) ? `<details><summary>error</summary><div class="err">${esc(r.error || p.error)}</div></details>` : ""}
+      <p class="help"><b>Nothing was saved.</b> Look at the model in Revit, then save it yourself if you want to keep it.</p>${dismiss}`;
+  } else if(j.state === "done"){
     const r = j.result || {}, t = r.totals || {};
     $("#runTitle").textContent = `Finished - ${t.ok || 0} of ${r.requested || 0} OK`;
-    $("#runBody").innerHTML = `<div class="scroll"><table><thead><tr><th>Layout</th><th>Ceilings</th><th>Panels</th><th>Time</th><th>Result</th></tr></thead><tbody>${
-      (r.files||[]).map(f => `<tr><td>${esc(f.file)}</td><td>${tagFor(f.ceiling)}</td><td>${tagFor(f.panels)}</td><td class="num">${f.sec ?? ""} s</td>
+    $("#runBody").innerHTML = `<div class="scroll"><table><thead><tr><th>Layout</th><th>Ran</th><th>Ceilings</th><th>Panels</th><th>Time</th><th>Result</th></tr></thead><tbody>${
+      (r.files||[]).map(f => `<tr><td>${esc(f.file)}</td><td class="help">${esc(f.steps ? describe(f.steps) : "")}</td><td>${tagFor(f.ceiling)}</td><td>${tagFor(f.panels)}</td><td class="num">${f.sec ?? ""} s</td>
         <td>${tagFor(f.status)}${f.fail_reasons ? `<ul class="flags">${f.fail_reasons.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
         ${f.error ? `<details><summary>error</summary><div class="err">${esc(f.error)}</div></details>` : ""}</td></tr>`).join("")
     }</tbody></table></div>
@@ -291,7 +411,7 @@ $("#outputs").addEventListener("click", async e => {
     }
     if(b.dataset.panels){
       if(!confirm("Run the panel generators on this ceiling-split layout?")) return;
-      await api("/api/run", {files:[b.dataset.panels], stages:["panels"]}); poll();
+      await api("/api/run", {files:[{path:b.dataset.panels, steps:PRESETS.panels}]}); poll();
     }
   }catch(err){ toast(err.message); }
 });
@@ -303,6 +423,69 @@ $("#promote").onclick = async () => {
 };
 document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => api("/api/open", {dir:b.dataset.open}).catch(e => toast(e.message)));
 
+// ------------------------------------------------------------------ setup
+let SETUP_OPEN = null;
+function light(id, cls){ $(id).className = "light " + cls; }
+function renderSetup(st){
+  const s = st.setup || {}, b = st.bridge || {};
+  const busy = st.job && st.job.state === "running";
+  // 1 - Revit
+  light("#l1", s.revit_running ? "ok" : s.revit_installed ? "" : "bad");
+  $("#t1").innerHTML = s.revit_running ? "Open." : s.revit_installed ? "Not open yet."
+      : `Revit 2026 not found at <code class="path">${esc(s.revit_exe)}</code>. Ask for Revit 2026 to be installed.`;
+  // 2 - connection
+  light("#l2", b.alive ? "ok" : s.revit_running ? "wait" : "");
+  let t2 = "", a2 = "";
+  if(b.alive){
+    t2 = b.busy ? "Connected - busy running a job." : `Connected. Revit is ready (model: ${esc(b.doc || "?")}).`;
+  } else if(!s.revit_running){
+    t2 = s.host_exists ? "Click <b>Start Revit &amp; connect</b>. Revit opens, then Dynamo opens by itself and connects (1-2 minutes). Don't click inside Revit until the light here turns green."
+                       : "First time on this computer: open Revit, connect by hand once (steps appear here when Revit is open), then click <b>Create host model</b>. After that, Start does everything.";
+    if(s.host_exists) a2 = `<button class="primary" id="startRevit">Start Revit &amp; connect</button>`;
+  } else {
+    t2 = `Revit is open but not connected. Either close Revit and use <b>Start Revit &amp; connect</b>, or connect it by hand:
+      <ol><li>In Revit open any model, then <b>Manage</b> tab → <b>Dynamo</b>.</li>
+      <li>Click <button id="revealDyn">Show the graph file</button> - a folder opens with <b>ORIGIN Pipeline Bridge.dyn</b> highlighted.
+          Drag it onto Dynamo's grey grid. The Dynamo tab must then say <b>ORIGIN Pipeline Bridge</b> (not "Layout Bridge" or any other graph).
+          <button class="link" id="copyDyn">or copy its path</button></li>
+      <li>If a yellow bar says the file is not trusted, click <b>Trust</b>. Bottom-left run mode must say <b>Periodic</b>.</li>
+      <li>Leave Dynamo open. If it stops responding later, switch run mode to Manual and back to Periodic.</li></ol>`;
+  }
+  if(s.dynamo_trusted === false){
+    t2 += `<div class="flags" style="margin-top:6px">Dynamo does not trust the ORIGIN folder yet, so the connection opens paused.
+      When Dynamo shows a yellow bar about this file, click <b>Trust</b> (or in Dynamo: <b>Settings → Preferences → Security → Trusted Paths</b>, add
+      <code class="path">${esc(s.dyn_dir)}</code>). You only do this once per computer.</div>`;
+  }
+  if(b.alive && !s.host_exists && !busy) a2 += `<button id="makeHost">Create host model</button>`;
+  $("#t2").innerHTML = t2; $("#a2").innerHTML = a2;
+  // 3 - output
+  light("#l3", s.work ? "ok" : "");
+  $("#t3").innerHTML = `Results are saved here: <code class="path">${esc(s.work || "")}</code><br>01_ceiling_done · 02_panels_done · 03_sim_ready`;
+  $("#a3").innerHTML = `<button data-open2="panels">Open results</button>`;
+  // collapse when everything is green
+  const ready = s.revit_running && b.alive;
+  $("#setupTitle").textContent = ready ? "0 · Connected" : "0 · Get connected";
+  $("#setupSub").textContent = ready ? "Revit is connected. Pick layouts below." : "Three green lights and you are ready.";
+  $("#setupToggle").hidden = !ready;
+  if(SETUP_OPEN === null || !ready) $("#setupCard").classList.toggle("compact", ready && SETUP_OPEN !== true);
+}
+$("#setupToggle").onclick = () => { SETUP_OPEN = $("#setupCard").classList.contains("compact"); $("#setupCard").classList.toggle("compact"); $("#setupToggle").textContent = SETUP_OPEN ? "hide setup" : "show setup"; };
+$("#setupCard").addEventListener("click", async e => {
+  const b = e.target;
+  try{
+    if(b.id === "startRevit"){
+      b.disabled = true; b.textContent = "Starting…";
+      await api("/api/start-revit", {});
+      toast("Revit is starting. Dynamo opens by itself - wait for the green light.", true);
+    }
+    if(b.id === "makeHost"){ b.disabled = true; b.textContent = "Creating…"; const r = await api("/api/make-host", {}); toast("Host model ready: " + (r.host || ""), true); }
+    if(b.id === "revealDyn"){ await api("/api/reveal-dyn", {}); toast("Drag the highlighted file onto Dynamo's grid.", true); }
+    if(b.id === "copyDyn"){ await navigator.clipboard.writeText(STATE.setup.dyn); toast("Path copied - paste it into Dynamo's Open dialog.", true); }
+    if(b.dataset.open2){ await api("/api/open", {dir:b.dataset.open2}); }
+  }catch(err){ toast(err.message); }
+  poll();
+});
+
 // ------------------------------------------------------------------ status loop
 async function poll(){
   try{
@@ -313,6 +496,8 @@ async function poll(){
     pill.title = b.text + "\nbridge folder: " + b.dir;
     $("#runNote").textContent = b.alive ? "Results are saved as copies in 01_ceiling_done / 02_panels_done. Originals are never changed."
                                         : "Revit bridge: " + b.text;
+    renderSetup(STATE);
+    renderOpen(STATE);
     const j = STATE.job;
     renderJob(j);
     if(LAST_JOB === "running" && j.state !== "running"){ loadLayouts(); loadOutputs(); }
